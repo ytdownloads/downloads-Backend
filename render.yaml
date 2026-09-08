@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: ytdownloader
+    runtime: node
+    plan: starter
+    buildCommand: ./scripts/render-build.sh
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DOWNLOAD_CONCURRENCY
+        value: 2
+      - key: MAX_PLAYLIST_ITEMS
+        value: 100
+      - key: JOB_CLEANUP_DELAY_MS
+        value: 300000
+      - key: DOWNLOAD_TIMEOUT_MS
+        value: 600000
+      - key: FFMPEG_TIMEOUT_MS
+        value: 1800000
+      - key: INFO_TIMEOUT_MS
+        value: 60000
+      - key: FRONTEND_URL
+        sync: false
