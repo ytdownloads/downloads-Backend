@@ -1,9 +1,23 @@
+import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { logger } from './utils/logger.js';
 import { CleanupService } from './services/cleanup.service.js';
 import { jobRegistry } from './services/jobRegistry.service.js';
 import { batchJobRegistry } from './services/batchJobRegistry.service.js';
+
+// Prepend project-local bin and node_modules/.bin directories to PATH
+const projectBin = path.resolve(process.cwd(), 'bin');
+const nodeModulesBin = path.resolve(process.cwd(), 'node_modules', '.bin');
+const currentPath = process.env.PATH || process.env.Path || '';
+const pathDelimiter = path.delimiter;
+const pathParts = currentPath.split(pathDelimiter);
+
+if (!pathParts.includes(projectBin)) {
+  process.env.PATH = `${projectBin}${pathDelimiter}${nodeModulesBin}${pathDelimiter}${currentPath}`;
+  process.env.Path = process.env.PATH;
+}
 
 const app = createApp();
 
@@ -15,6 +29,18 @@ const server = app.listen(env.PORT, '0.0.0.0', () => {
     port: env.PORT,
     environment: env.NODE_ENV,
     corsOrigin: env.FRONTEND_URL,
+  });
+
+  // Log detected yt-dlp binary version at startup
+  const probe = spawn('yt-dlp', ['--version'], {
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  probe.stdout?.on('data', (data: Buffer) => {
+    logger.info(`[Media Engine] yt-dlp active: v${data.toString().trim()}`);
+  });
+  probe.on('error', () => {
+    logger.warn('[Media Engine] yt-dlp not detected on current PATH');
   });
 });
 

@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: ytdownloader
+    name: downloads-backend
     runtime: node
     plan: starter
-    buildCommand: ./scripts/render-build.sh
+    buildCommand: bash ./scripts/render-build.sh
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:

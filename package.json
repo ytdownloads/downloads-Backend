@@ -7,6 +7,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "prebuild": "node scripts/install-binaries.js",
     "build": "rimraf dist && tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit"
