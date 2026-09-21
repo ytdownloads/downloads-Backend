@@ -11,3 +11,4 @@ apiRouter.use('/', healthRouter);
 apiRouter.use('/', infoRouter);
 apiRouter.use('/', downloadRouter);
 apiRouter.use('/', batchRouter);
+apiRouter.use('/download', batchRouter);

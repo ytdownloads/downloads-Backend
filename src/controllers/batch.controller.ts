@@ -10,6 +10,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { logger } from '../utils/logger.js';
 import { validateYouTubeUrl } from '../services/urlValidation.service.js';
 import { env } from '../config/env.js';
+import { sanitizeCleanFilename, buildContentDispositionHeader } from '../utils/filename.js';
 
 const batchItemSchema = z.object({
   id: z.string().trim().min(1, 'Item id is required.'),
@@ -22,7 +23,18 @@ const batchItemSchema = z.object({
 const createBatchSchema = z.object({
   playlistTitle: z.string().trim().optional(),
   formatId: z.string().trim().min(1, 'formatId is required.'),
-  items: z.array(batchItemSchema).min(1, 'At least one item is required in the batch.'),
+  items: z
+    .array(batchItemSchema)
+    .min(1, 'At least one item is required in the batch.')
+    .max(30, 'Maximum 30 videos can be downloaded in one batch.'),
+});
+
+const addBatchItemsSchema = z.object({
+  formatId: z.string().trim().min(1, 'formatId is required.'),
+  items: z
+    .array(batchItemSchema)
+    .min(1, 'At least one item is required.')
+    .max(30, 'Maximum 30 videos can be added at a time.'),
 });
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -141,6 +153,8 @@ export function getBatchEvents(
     batchJob.emitter.on('item_complete', onEvent);
     batchJob.emitter.on('item_failed', onEvent);
     batchJob.emitter.on('batch_progress', onEvent);
+    batchJob.emitter.on('batch_update', onEvent);
+    batchJob.emitter.on('zip_ready', onEvent);
     batchJob.emitter.on('batch_cancelled', onCancelled);
 
     req.on('close', () => {
@@ -150,6 +164,8 @@ export function getBatchEvents(
       batchJob.emitter.off('item_complete', onEvent);
       batchJob.emitter.off('item_failed', onEvent);
       batchJob.emitter.off('batch_progress', onEvent);
+      batchJob.emitter.off('batch_update', onEvent);
+      batchJob.emitter.off('zip_ready', onEvent);
       batchJob.emitter.off('batch_cancelled', onCancelled);
     });
   } catch (error) {
@@ -189,62 +205,27 @@ export function getBatchZip(
       throw new AppError('NOT_FOUND', 'Batch download job not found or expired.', 404);
     }
 
-    const completedItems = batchJob.items.filter(
-      (item) => item.status === 'completed' && item.filePath && fs.existsSync(item.filePath)
-    );
-
-    if (completedItems.length === 0) {
-      throw new AppError('INVALID_REQUEST', 'No completed files available to package into ZIP yet.', 400);
+    if (batchJob.zipStatus !== 'ready' || !batchJob.zipFilePath || !fs.existsSync(batchJob.zipFilePath)) {
+      throw new AppError('INVALID_REQUEST', 'ZIP file is not ready yet. Please wait for ZIP generation to complete.', 400);
     }
 
-    const safeTitle = (batchJob.playlistTitle || 'Playlist')
-      .replace(/[^\w\s.-]/g, '')
-      .trim()
-      .replace(/\s+/g, '_') || 'Playlist';
+    const stat = fs.statSync(batchJob.zipFilePath);
+    const fileName = batchJob.zipFileName || 'playlist.zip';
 
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.zip"`);
+    res.setHeader('Content-Disposition', buildContentDispositionHeader(fileName));
+    res.setHeader('Content-Length', stat.size.toString());
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('X-Content-Type-Options', 'nosniff');
 
-    logger.info('Streaming batch ZIP to client', {
+    logger.info('Streaming finalized batch ZIP to client', {
       batchJobId,
-      completedCount: completedItems.length,
+      fileName,
+      fileSize: stat.size,
     });
 
-    const archive = new ZipArchive({
-      zlib: { level: 0 }, // Store mode: Zero compression overhead on already encoded video/audio
-    });
-
-    archive.on('warning', (err: ArchiverError) => {
-      if (err.code === 'ENOENT') {
-        logger.warn('Archiver file not found warning', { error: err.message });
-      } else {
-        logger.error('Archiver warning', { error: err.message });
-      }
-    });
-
-    archive.on('error', (err: ArchiverError) => {
-      logger.error('Archiver error', { error: err.message });
-      if (!res.headersSent) {
-        res.status(500).end();
-      }
-    });
-
-    archive.pipe(res);
-
-    completedItems.forEach((item, index) => {
-      if (!item.filePath) return;
-      const ext = path.extname(item.filePath);
-      const indexNum = String(index + 1).padStart(2, '0');
-      const safeItemTitle = (item.title || `video_${index + 1}`)
-        .replace(/[^\w\s.-]/g, '')
-        .trim();
-      const entryName = `${indexNum} - ${safeItemTitle}${ext}`;
-      archive.file(item.filePath, { name: entryName });
-    });
-
-    void archive.finalize();
+    const readStream = fs.createReadStream(batchJob.zipFilePath);
+    readStream.pipe(res);
   } catch (error) {
     next(error);
   }
@@ -284,17 +265,17 @@ export function getBatchItemFile(
 
     const ext = path.extname(resolvedPath).toLowerCase();
     const contentType = ext === '.mp3' ? 'audio/mpeg' : 'video/mp4';
-    const safeFileName = (item.fileName || `${item.title}${ext}`).replace(/[^\w.-]/g, '_');
+    const cleanFileName = sanitizeCleanFilename(item.fileName || item.title || `video${ext}`, ext);
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"`);
+    res.setHeader('Content-Disposition', buildContentDispositionHeader(cleanFileName));
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     if (item.fileSize) {
       res.setHeader('Content-Length', item.fileSize);
     }
 
-    logger.info('Streaming batch item file to client', { batchJobId, itemId, safeFileName });
+    logger.info('Streaming batch item file to client', { batchJobId, itemId, cleanFileName });
     const stream = fs.createReadStream(resolvedPath);
     stream.pipe(res);
 
@@ -329,6 +310,32 @@ export function cancelBatch(
   }
 }
 
+export async function cancelBatchItem(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const batchJobId = getValidatedBatchJobId(req);
+    const itemId = getValidatedItemId(req);
+    const batchJob = batchJobRegistry.getBatchJob(batchJobId);
+
+    if (!batchJob) {
+      throw new AppError('NOT_FOUND', 'Batch download job not found.', 404);
+    }
+
+    const item = batchJob.getItem(itemId);
+    if (!item) {
+      throw new AppError('NOT_FOUND', 'Item not found in batch job.', 404);
+    }
+
+    await playlistQueue.cancelItem(batchJobId, itemId);
+    sendSuccess(res, { message: 'Item cancelled successfully.', itemId }, 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
 export function retryBatch(
   req: Request,
   res: Response,
@@ -342,8 +349,94 @@ export function retryBatch(
       throw new AppError('NOT_FOUND', 'Batch download job not found.', 404);
     }
 
+    const retryableItems = batchJob.items.filter(
+      (item) => item.status === 'failed' || item.status === 'cancelled'
+    );
+    if (retryableItems.length > 30) {
+      throw new AppError('INVALID_REQUEST', 'Maximum 30 videos can be downloaded in one batch.', 400);
+    }
+
     playlistQueue.retryBatch(batchJobId);
     sendSuccess(res, { message: 'Retrying failed items in batch.' }, 200);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function addBatchItems(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const batchJobId = getValidatedBatchJobId(req);
+    const batchJob = batchJobRegistry.getBatchJob(batchJobId);
+
+    if (!batchJob) {
+      throw new AppError('NOT_FOUND', 'Batch download job not found.', 404);
+    }
+
+    if (batchJob.status === 'cancelled') {
+      throw new AppError('INVALID_REQUEST', 'Cannot add items to a cancelled batch download.', 400);
+    }
+
+    const parseResult = addBatchItemsSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      const issue = parseResult.error.issues[0]?.message || 'Invalid add items request body.';
+      throw new AppError('INVALID_REQUEST', issue, 400);
+    }
+
+    const { formatId, items } = parseResult.data;
+
+    // Validate formatId
+    const isAudio = formatId === 'audio-best';
+    const isVideo = /^video-(\d{3,4})p$/.test(formatId);
+    if (!isAudio && !isVideo) {
+      throw new AppError('FORMAT_UNAVAILABLE', 'Invalid or unsupported format selection.', 400);
+    }
+
+    // Check for duplicates against existing items
+    const existingIds = new Set(batchJob.items.map((i) => i.id));
+    const newItems = items.filter((item) => !existingIds.has(item.id));
+
+    if (newItems.length === 0) {
+      throw new AppError('INVALID_REQUEST', 'All selected videos are already in the download queue.', 400);
+    }
+
+    // Validate item URLs
+    const sanitizedItems = newItems.map((item) => {
+      try {
+        const validated = validateYouTubeUrl(item.url);
+        return {
+          ...item,
+          url: validated.normalizedUrl,
+        };
+      } catch {
+        return item;
+      }
+    });
+
+    const added = batchJob.addItems(sanitizedItems, formatId);
+    playlistQueue.resumeBatch(batchJobId);
+
+    logger.info('Added items to batch job', {
+      batchJobId,
+      addedCount: added.length,
+      totalItems: batchJob.items.length,
+      formatId,
+    });
+
+    sendSuccess(
+      res,
+      {
+        batchJobId,
+        addedCount: added.length,
+        totalItems: batchJob.items.length,
+        status: batchJob.status,
+        batch: batchJob.toData(),
+      },
+      200
+    );
   } catch (error) {
     next(error);
   }

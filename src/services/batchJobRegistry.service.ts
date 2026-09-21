@@ -2,14 +2,17 @@ import { EventEmitter } from 'node:events';
 import { ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import fs from 'node:fs';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import {
   BatchStatus,
   PlaylistItemStatus,
+  DownloadStage,
   BatchItemData,
   BatchJobData,
   BatchPlaylistItemInput,
+  BatchZipStatus,
 } from '../types/download.types.js';
 import { CleanupService } from './cleanup.service.js';
 
@@ -21,6 +24,11 @@ export class BatchJob {
   public items: BatchItemData[];
   public readonly tempDir: string;
   public activeProcesses: Map<string, ChildProcess> = new Map();
+  public zipStatus: BatchZipStatus = 'idle';
+  public zipStatusMessage?: string;
+  public zipFilePath?: string;
+  public zipFileName?: string;
+  public zipFileSize?: number;
   public readonly createdAt: number;
   public updatedAt: number;
   public readonly emitter: EventEmitter;
@@ -35,30 +43,54 @@ export class BatchJob {
     this.updatedAt = Date.now();
     this.tempDir = path.join(path.resolve(env.TEMP_DIR), `batch_${this.batchJobId}`);
 
-    this.items = items.map((item) => ({
-      id: item.id,
-      url: item.url,
-      title: item.title,
-      durationSeconds: item.durationSeconds,
-      thumbnail: item.thumbnail,
-      formatId,
-      status: 'pending',
-      percentage: 0,
-      downloadedBytes: 0,
-      totalBytes: null,
-      speedBytesPerSecond: null,
-      etaSeconds: null,
-    }));
+    const seenIds = new Set<string>();
+    this.items = items.map((item, idx) => {
+      let uniqueId = item.id;
+      if (seenIds.has(uniqueId)) {
+        let suffix = idx + 1;
+        while (seenIds.has(`${item.id}_${suffix}`)) {
+          suffix++;
+        }
+        uniqueId = `${item.id}_${suffix}`;
+      }
+      seenIds.add(uniqueId);
+
+      return {
+        id: uniqueId,
+        url: item.url,
+        title: item.title,
+        durationSeconds: item.durationSeconds,
+        thumbnail: item.thumbnail,
+        formatId,
+        status: 'pending',
+        stage: 'preparing',
+        stageMessage: 'Queued',
+        isIndeterminate: false,
+        percentage: 0,
+        downloadedBytes: 0,
+        totalBytes: null,
+        speedBytesPerSecond: null,
+        etaSeconds: null,
+      };
+    });
 
     this.emitter = new EventEmitter();
     this.emitter.setMaxListeners(100);
+    this.emitter.on('error', () => {});
   }
 
   public getItem(itemId: string): BatchItemData | undefined {
     return this.items.find((i) => i.id === itemId);
   }
 
-  public updateItemStatus(itemId: string, status: PlaylistItemStatus, error?: { code: string; message: string }): void {
+  public updateItemStatus(
+    itemId: string,
+    status: PlaylistItemStatus,
+    error?: { code: string; message: string },
+    stage?: DownloadStage,
+    stageMessage?: string,
+    isIndeterminate?: boolean
+  ): void {
     const item = this.getItem(itemId);
     if (!item) return;
 
@@ -66,6 +98,10 @@ export class BatchJob {
     if (error) {
       item.error = error;
     }
+    if (stage) item.stage = stage;
+    if (stageMessage) item.stageMessage = stageMessage;
+    if (isIndeterminate !== undefined) item.isIndeterminate = isIndeterminate;
+
     this.updatedAt = Date.now();
     this.recalculateBatchStatus();
     this.emitter.emit('item_status', { itemId, item, batch: this.toData() });
@@ -79,6 +115,9 @@ export class BatchJob {
       totalBytes?: number | null;
       speedBytesPerSecond?: number | null;
       etaSeconds?: number | null;
+      stage?: DownloadStage;
+      stageMessage?: string;
+      isIndeterminate?: boolean;
     }
   ): void {
     const item = this.getItem(itemId);
@@ -99,6 +138,15 @@ export class BatchJob {
     if (progress.etaSeconds !== undefined) {
       item.etaSeconds = progress.etaSeconds;
     }
+    if (progress.stage) {
+      item.stage = progress.stage;
+    }
+    if (progress.stageMessage) {
+      item.stageMessage = progress.stageMessage;
+    }
+    if (progress.isIndeterminate !== undefined) {
+      item.isIndeterminate = progress.isIndeterminate;
+    }
 
     this.updatedAt = Date.now();
     this.recalculateBatchStatus();
@@ -110,6 +158,9 @@ export class BatchJob {
     if (!item) return;
 
     item.status = 'completed';
+    item.stage = 'completed';
+    item.stageMessage = 'Ready';
+    item.isIndeterminate = false;
     item.percentage = 100;
     item.filePath = filePath;
     item.fileName = fileName;
@@ -135,6 +186,9 @@ export class BatchJob {
     if (!item) return;
 
     item.status = 'failed';
+    item.stage = 'failed';
+    item.stageMessage = message;
+    item.isIndeterminate = false;
     item.error = { code, message };
     item.speedBytesPerSecond = null;
     item.etaSeconds = null;
@@ -151,9 +205,12 @@ export class BatchJob {
 
   public cancelItem(itemId: string): void {
     const item = this.getItem(itemId);
-    if (!item || item.status === 'completed' || item.status === 'cancelled') return;
+    if (!item || item.status === 'cancelled') return;
 
     item.status = 'cancelled';
+    item.stage = 'cancelled';
+    item.stageMessage = 'Cancelled';
+    item.isIndeterminate = false;
     const child = this.activeProcesses.get(itemId);
     if (child && !child.killed) {
       try {
@@ -171,9 +228,39 @@ export class BatchJob {
     this.emitter.emit('item_status', { itemId, item, batch: this.toData() });
   }
 
+  public updateZipStatus(
+    status: BatchZipStatus,
+    message?: string,
+    zipFilePath?: string,
+    zipFileName?: string,
+    zipFileSize?: number
+  ): void {
+    this.zipStatus = status;
+    if (message !== undefined) this.zipStatusMessage = message;
+    if (zipFilePath !== undefined) this.zipFilePath = zipFilePath;
+    if (zipFileName !== undefined) this.zipFileName = zipFileName;
+    if (zipFileSize !== undefined) this.zipFileSize = zipFileSize;
+    this.updatedAt = Date.now();
+    this.emitter.emit('batch_update', this.toData());
+    if (status === 'ready') {
+      this.emitter.emit('zip_ready', this.toData());
+    }
+  }
+
   public cancelAll(): void {
     logger.info('Cancelling batch job', { batchJobId: this.batchJobId });
     this.status = 'cancelled';
+    this.zipStatus = 'idle';
+    this.zipStatusMessage = undefined;
+
+    if (this.zipFilePath && fs.existsSync(this.zipFilePath)) {
+      try {
+        fs.unlinkSync(this.zipFilePath);
+      } catch (err) {
+        logger.warn('Error removing zip file on cancelAll', { error: String(err) });
+      }
+      this.zipFilePath = undefined;
+    }
 
     for (const item of this.items) {
       if (item.status === 'pending' || item.status === 'downloading' || item.status === 'processing') {
@@ -251,7 +338,7 @@ export class BatchJob {
           this.status = 'completed_with_errors';
         } else if (completed > 0) {
           this.status = 'completed';
-        } else if (failed === total) {
+        } else if (failed > 0) {
           this.status = 'failed';
         } else {
           this.status = 'cancelled';
@@ -273,6 +360,81 @@ export class BatchJob {
       batchJobRegistry.removeJob(this.batchJobId);
     }, delayMs);
     this.cleanupTimeout.unref();
+  }
+
+  public cancelCleanup(): void {
+    if (this.cleanupTimeout) {
+      clearTimeout(this.cleanupTimeout);
+      this.cleanupTimeout = undefined;
+    }
+  }
+
+  public addItems(newItems: BatchPlaylistItemInput[], formatId: string): BatchItemData[] {
+    this.cancelCleanup();
+
+    if (newItems.length === 0) {
+      return [];
+    }
+
+    const seenIds = new Set(this.items.map((i) => i.id));
+    const createdItems: BatchItemData[] = newItems.map((item, idx) => {
+      let uniqueId = item.id;
+      if (seenIds.has(uniqueId)) {
+        let suffix = this.items.length + idx + 1;
+        while (seenIds.has(`${item.id}_${suffix}`)) {
+          suffix++;
+        }
+        uniqueId = `${item.id}_${suffix}`;
+      }
+      seenIds.add(uniqueId);
+
+      return {
+        id: uniqueId,
+        url: item.url,
+        title: item.title,
+        durationSeconds: item.durationSeconds,
+        thumbnail: item.thumbnail,
+        formatId,
+        status: 'pending',
+        stage: 'preparing',
+        stageMessage: 'Queued',
+        isIndeterminate: false,
+        percentage: 0,
+        downloadedBytes: 0,
+        totalBytes: null,
+        speedBytesPerSecond: null,
+        etaSeconds: null,
+      };
+    });
+
+    this.items.push(...createdItems);
+
+    if (
+      this.status === 'completed' ||
+      this.status === 'completed_with_errors' ||
+      this.status === 'failed'
+    ) {
+      this.status = 'processing';
+    }
+
+    if (this.zipFilePath && fs.existsSync(this.zipFilePath)) {
+      try {
+        fs.unlinkSync(this.zipFilePath);
+      } catch (err) {
+        logger.warn('Error removing old zip file on addItems', { error: String(err) });
+      }
+      this.zipFilePath = undefined;
+      this.zipFileName = undefined;
+      this.zipFileSize = undefined;
+    }
+    this.zipStatus = 'idle';
+    this.zipStatusMessage = undefined;
+
+    this.updatedAt = Date.now();
+    this.recalculateBatchStatus();
+    this.emitter.emit('batch_update', this.toData());
+
+    return createdItems;
   }
 
   public toData(): BatchJobData {
@@ -297,6 +459,10 @@ export class BatchJob {
       cancelledItems,
       overallPercentage: this.getOverallPercentage(),
       items: this.items.map((i) => ({ ...i })),
+      zipStatus: this.zipStatus,
+      zipStatusMessage: this.zipStatusMessage,
+      zipFileName: this.zipFileName,
+      zipFileSize: this.zipFileSize,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { JobStatus, DownloadProgress, DownloadJobData } from '../types/download.types.js';
+import { JobStatus, DownloadStage, DownloadProgress, DownloadJobData } from '../types/download.types.js';
 import { CleanupService } from './cleanup.service.js';
 
 export class DownloadJob {
@@ -34,6 +34,9 @@ export class DownloadJob {
     this.status = 'created';
     this.progress = {
       status: 'created',
+      stage: 'preparing',
+      stageMessage: 'Initializing download...',
+      isIndeterminate: true,
       percentage: 0,
       downloadedBytes: 0,
       totalBytes: null,
@@ -45,13 +48,30 @@ export class DownloadJob {
     this.updatedAt = Date.now();
     this.emitter = new EventEmitter();
     this.emitter.setMaxListeners(50);
+    this.emitter.on('error', () => {});
   }
 
-  public updateStatus(status: JobStatus): void {
+  public updateStatus(
+    status: JobStatus,
+    stage?: DownloadStage,
+    stageMessage?: string,
+    isIndeterminate?: boolean
+  ): void {
     this.status = status;
     this.progress.status = status;
+    if (stage) this.progress.stage = stage;
+    if (stageMessage) this.progress.stageMessage = stageMessage;
+    if (isIndeterminate !== undefined) this.progress.isIndeterminate = isIndeterminate;
     this.updatedAt = Date.now();
     this.emitter.emit('status', status);
+  }
+
+  public updateStage(stage: DownloadStage, stageMessage: string, isIndeterminate = false): void {
+    this.progress.stage = stage;
+    this.progress.stageMessage = stageMessage;
+    this.progress.isIndeterminate = isIndeterminate;
+    this.updatedAt = Date.now();
+    this.emitter.emit('progress', this.progress);
   }
 
   public updateProgress(progressUpdate: Partial<DownloadProgress>): void {
@@ -67,13 +87,21 @@ export class DownloadJob {
     this.outputFilePath = filePath;
     this.fileName = fileName;
     this.fileSize = fileSize;
-    this.updateStatus('completed');
-    this.updateProgress({
+    this.status = 'completed';
+    this.progress = {
+      ...this.progress,
+      status: 'completed',
+      stage: 'completed',
+      stageMessage: 'Download ready',
+      isIndeterminate: false,
       percentage: 100,
       downloadedBytes: fileSize,
       totalBytes: fileSize,
       etaSeconds: 0,
-    });
+      speedBytesPerSecond: null,
+    };
+    this.updatedAt = Date.now();
+    this.emitter.emit('status', 'completed');
     this.emitter.emit('completed', this.toData());
 
     // Schedule cleanup of temporary files after delay
@@ -82,8 +110,21 @@ export class DownloadJob {
 
   public fail(code: string, message: string): void {
     this.error = { code, message };
-    this.updateStatus('failed');
-    this.emitter.emit('error', this.error);
+    this.status = 'failed';
+    this.progress = {
+      ...this.progress,
+      status: 'failed',
+      stage: 'failed',
+      stageMessage: message,
+      isIndeterminate: false,
+    };
+    this.updatedAt = Date.now();
+    this.emitter.emit('status', 'failed');
+    try {
+      this.emitter.emit('error', this.error);
+    } catch (err) {
+      logger.warn('Error emitting error event on DownloadJob', { error: String(err) });
+    }
 
     // Immediate cleanup on failure
     void CleanupService.cleanupJobDir(this.tempDir);
@@ -93,7 +134,16 @@ export class DownloadJob {
     if (this.status === 'completed' || this.status === 'cancelled') return;
 
     logger.info('Cancelling download job', { jobId: this.jobId });
-    this.updateStatus('cancelled');
+    this.status = 'cancelled';
+    this.progress = {
+      ...this.progress,
+      status: 'cancelled',
+      stage: 'cancelled',
+      stageMessage: 'Download cancelled',
+      isIndeterminate: false,
+    };
+    this.updatedAt = Date.now();
+    this.emitter.emit('status', 'cancelled');
 
     // Terminate child process safely
     if (this.childProcess && !this.childProcess.killed) {

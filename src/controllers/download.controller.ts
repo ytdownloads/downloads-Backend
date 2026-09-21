@@ -8,6 +8,7 @@ import { sendSuccess } from '../utils/response.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
+import { sanitizeCleanFilename, buildContentDispositionHeader } from '../utils/filename.js';
 
 const createDownloadSchema = z.object({
   url: z.string({
@@ -171,18 +172,18 @@ export function getDownloadFile(
     const ext = path.extname(resolvedPath).toLowerCase();
     const contentType = ext === '.mp3' ? 'audio/mpeg' : 'video/mp4';
 
-    // Safe filename header
-    const safeFileName = (job.fileName || `video${ext}`).replace(/[^\w.-]/g, '_');
+    // Clean, readable, Windows-safe filename
+    const cleanFileName = sanitizeCleanFilename(job.fileName || job.title || `video${ext}`, ext);
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${safeFileName}"`);
+    res.setHeader('Content-Disposition', buildContentDispositionHeader(cleanFileName));
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     if (job.fileSize) {
       res.setHeader('Content-Length', job.fileSize);
     }
 
-    logger.info('Streaming completed file to client', { jobId, safeFileName });
+    logger.info('Streaming completed file to client', { jobId, cleanFileName });
     const stream = fs.createReadStream(resolvedPath);
     stream.pipe(res);
 

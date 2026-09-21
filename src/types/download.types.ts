@@ -7,8 +7,22 @@ export type JobStatus =
   | 'failed'
   | 'cancelled';
 
+export type DownloadStage =
+  | 'preparing'
+  | 'downloading_video'
+  | 'downloading_audio'
+  | 'merging'
+  | 'processing'
+  | 'finalizing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
 export interface DownloadProgress {
   status: JobStatus;
+  stage: DownloadStage;
+  stageMessage: string;
+  isIndeterminate: boolean;
   percentage: number | null;
   downloadedBytes: number | null;
   totalBytes: number | null;
@@ -63,6 +77,9 @@ export interface BatchItemData {
   thumbnail?: string;
   formatId: string;
   status: PlaylistItemStatus;
+  stage?: DownloadStage;
+  stageMessage?: string;
+  isIndeterminate?: boolean;
   percentage: number;
   downloadedBytes: number;
   totalBytes: number | null;
@@ -77,6 +94,8 @@ export interface BatchItemData {
   };
 }
 
+export type BatchZipStatus = 'idle' | 'creating' | 'finalizing' | 'ready' | 'failed';
+
 export interface BatchJobData {
   batchJobId: string;
   playlistTitle?: string;
@@ -88,6 +107,10 @@ export interface BatchJobData {
   cancelledItems: number;
   overallPercentage: number;
   items: BatchItemData[];
+  zipStatus?: BatchZipStatus;
+  zipStatusMessage?: string;
+  zipFileName?: string;
+  zipFileSize?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -102,6 +125,11 @@ export interface BatchPlaylistItemInput {
 
 export interface CreateBatchDownloadRequest {
   playlistTitle?: string;
+  formatId: string;
+  items: BatchPlaylistItemInput[];
+}
+
+export interface AddBatchItemsRequest {
   formatId: string;
   items: BatchPlaylistItemInput[];
 }

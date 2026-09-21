@@ -83,7 +83,7 @@ export function createApp(): Express {
     ]);
     app.get('*', (req, res, next) => {
       const normalizedPath = req.path.toLowerCase().replace(/\/$/, '');
-      if (VALID_SPA_ROUTES.has(normalizedPath)) {
+      if (VALID_SPA_ROUTES.has(normalizedPath) || normalizedPath.startsWith('/downloads')) {
         return res.sendFile(path.join(targetDist, 'index.html'));
       }
       return next();

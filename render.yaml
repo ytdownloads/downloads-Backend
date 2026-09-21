@@ -14,7 +14,7 @@ services:
       - key: DOWNLOAD_CONCURRENCY
         value: 2
       - key: MAX_PLAYLIST_ITEMS
-        value: 100
+        value: 500
       - key: JOB_CLEANUP_DELAY_MS
         value: 300000
       - key: DOWNLOAD_TIMEOUT_MS

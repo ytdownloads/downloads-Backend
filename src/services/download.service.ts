@@ -6,6 +6,7 @@ import { logger } from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { validateYouTubeUrl } from './urlValidation.service.js';
 import { jobRegistry, DownloadJob } from './jobRegistry.service.js';
+import { sanitizeCleanFilename } from '../utils/filename.js';
 
 const VALID_VIDEO_FORMAT_REGEX = /^video-(\d{3,4})p$/;
 
@@ -51,16 +52,27 @@ export class DownloadService {
       '--no-playlist',
       '--windows-filenames',
       '--no-warnings',
+      '--extractor-args',
+      'youtube:player_client=android',
+      '--no-mtime',
+      '--buffer-size',
+      '1024k',
+      '--http-chunk-size',
+      '10M',
+      '--concurrent-fragments',
+      '4',
       '--paths',
       `home:${job.tempDir}`,
       '--output',
       '%(title).100B [%(id)s].%(ext)s',
       '--progress-template',
-      'download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.speed)s|%(progress.eta)s',
+      'download:download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.speed)s|%(progress.eta)s',
     ];
 
     if (isAudio) {
       args.push(
+        '-f',
+        'bestaudio/best',
         '-x',
         '--audio-format',
         'mp3',
@@ -87,7 +99,7 @@ export class DownloadService {
   }
 
   private static executeDownloadProcess(job: DownloadJob, args: string[]): void {
-    job.updateStatus('preparing');
+    job.updateStatus('preparing', 'preparing', 'Connecting to media server...', true);
     logger.info('Spawning yt-dlp download process', { jobId: job.jobId });
 
     let child;
@@ -167,13 +179,65 @@ export class DownloadService {
     const trimmed = line.trim();
     if (!trimmed) return;
 
-    // Check for real progress template line: download:bytes|total|speed|eta
+    // Early connection & stream negotiation stages
+    if (trimmed.includes('Extracting URL') || trimmed.includes('Downloading webpage')) {
+      job.updateStatus('preparing', 'preparing', 'Resolving YouTube media stream...', true);
+      return;
+    }
+    if (trimmed.includes('Downloading android player API JSON') || trimmed.includes('player API JSON')) {
+      job.updateStatus('preparing', 'preparing', 'Connecting to media server...', true);
+      return;
+    }
+    if (trimmed.includes('Downloading 1 format') || trimmed.includes('Downloading 2 format')) {
+      job.updateStatus('preparing', 'preparing', 'Negotiating video stream...', true);
+      return;
+    }
+
+    // Detect stream destination to distinguish video vs audio download stages
+    if (trimmed.includes('Destination:')) {
+      const lower = trimmed.toLowerCase();
+      if (
+        lower.includes('.mp4') ||
+        lower.includes('.webm') ||
+        lower.includes('.mkv') ||
+        lower.match(/\.f(394|395|396|397|398|399|137|136|135|134|133|248|247|244|243|242|160|278)\b/)
+      ) {
+        job.updateStatus('downloading', 'downloading_video', 'Downloading video stream...', false);
+        return;
+      } else if (
+        lower.includes('.m4a') ||
+        lower.includes('.opus') ||
+        lower.includes('.aac') ||
+        lower.includes('.mp3') ||
+        lower.match(/\.f(140|251|250|249|139)\b/)
+      ) {
+        job.updateStatus('downloading', 'downloading_audio', 'Downloading audio stream...', false);
+        return;
+      } else if (job.formatId === 'audio-best') {
+        job.updateStatus('downloading', 'downloading_audio', 'Downloading audio stream...', false);
+        return;
+      } else {
+        job.updateStatus('downloading', 'downloading_video', 'Downloading video stream...', false);
+        return;
+      }
+    }
+
+    // Real progress template line: download:bytes|total|speed|eta OR bytes|total|speed|eta
+    let progressLine: string | null = null;
     if (trimmed.startsWith('download:')) {
+      progressLine = trimmed.substring(9);
+    } else if (/^\d+\|[0-9NA]+\|[0-9.NA]+\|[0-9.NA]+/.test(trimmed)) {
+      progressLine = trimmed;
+    }
+
+    if (progressLine) {
       if (job.status === 'preparing') {
-        job.updateStatus('downloading');
+        const initialStage = job.formatId === 'audio-best' ? 'downloading_audio' : 'downloading_video';
+        const initialMsg = job.formatId === 'audio-best' ? 'Downloading audio stream...' : 'Downloading video stream...';
+        job.updateStatus('downloading', initialStage, initialMsg, false);
       }
 
-      const parts = trimmed.substring(9).split('|');
+      const parts = progressLine.split('|');
       const downloadedBytes = parts[0] && parts[0] !== 'NA' ? parseFloat(parts[0]) : null;
       const totalBytes = parts[1] && parts[1] !== 'NA' ? parseFloat(parts[1]) : null;
       const speed = parts[2] && parts[2] !== 'NA' ? parseFloat(parts[2]) : null;
@@ -181,10 +245,11 @@ export class DownloadService {
 
       let percentage: number | null = null;
       if (downloadedBytes !== null && totalBytes !== null && totalBytes > 0) {
-        percentage = Math.min(99, Math.round((downloadedBytes / totalBytes) * 100));
+        percentage = Math.min(100, Math.round((downloadedBytes / totalBytes) * 100));
       }
 
       job.updateProgress({
+        isIndeterminate: false,
         percentage,
         downloadedBytes,
         totalBytes,
@@ -194,18 +259,37 @@ export class DownloadService {
       return;
     }
 
-    // Check for merger or audio extraction (processing state)
-    if (
-      trimmed.includes('[Merger]') ||
-      trimmed.includes('[ExtractAudio]') ||
-      trimmed.includes('Destination:') ||
-      trimmed.includes('Fixup')
-    ) {
-      job.updateStatus('processing');
+    // Check for FFmpeg merger
+    if (trimmed.includes('[Merger]') || trimmed.includes('Merging formats into')) {
+      job.updateStatus('processing', 'merging', 'Merging video and audio with FFmpeg...', true);
       job.updateProgress({
-        percentage: 99,
+        isIndeterminate: true,
+        speedBytesPerSecond: null,
         etaSeconds: null,
       });
+      return;
+    }
+
+    // Check for audio extraction or conversion
+    if (trimmed.includes('[ExtractAudio]') || trimmed.includes('[ffmpeg]')) {
+      job.updateStatus('processing', 'processing', 'Processing audio with FFmpeg...', true);
+      job.updateProgress({
+        isIndeterminate: true,
+        speedBytesPerSecond: null,
+        etaSeconds: null,
+      });
+      return;
+    }
+
+    // Check for finalizing / deleting intermediate files
+    if (trimmed.includes('Deleting original file') || trimmed.includes('Fixup')) {
+      job.updateStatus('processing', 'finalizing', 'Finalizing media file...', true);
+      job.updateProgress({
+        isIndeterminate: true,
+        speedBytesPerSecond: null,
+        etaSeconds: null,
+      });
+      return;
     }
   }
 
@@ -238,14 +322,16 @@ export class DownloadService {
       const chosenFileName = mediaFiles[0];
       const filePath = path.join(job.tempDir, chosenFileName);
       const stat = await fs.stat(filePath);
+      const ext = path.extname(chosenFileName);
+      const cleanFileName = sanitizeCleanFilename(job.title || chosenFileName, ext);
 
       logger.info('Download job completed successfully', {
         jobId: job.jobId,
-        fileName: chosenFileName,
+        fileName: cleanFileName,
         fileSize: stat.size,
       });
 
-      job.complete(filePath, chosenFileName, stat.size);
+      job.complete(filePath, cleanFileName, stat.size);
     } catch (err) {
       logger.error('Error verifying completed file', { error: String(err) });
       job.fail('DOWNLOAD_FAILED', 'Failed to inspect completed download file.');

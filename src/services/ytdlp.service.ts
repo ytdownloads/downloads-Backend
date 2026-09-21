@@ -155,6 +155,45 @@ function normalizeFormats(rawFormats?: RawFormat[]): NormalizedFormat[] {
   return result;
 }
 
+interface CacheEntry {
+  data: MediaInfoResult;
+  expiresAt: number;
+}
+
+const METADATA_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
+const MAX_METADATA_CACHE_SIZE = 500;
+
+class MetadataCache {
+  private cache = new Map<string, CacheEntry>();
+
+  public get(key: string): MediaInfoResult | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.data;
+  }
+
+  public set(key: string, data: MediaInfoResult): void {
+    if (this.cache.size >= MAX_METADATA_CACHE_SIZE) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey) this.cache.delete(oldestKey);
+    }
+    this.cache.set(key, {
+      data,
+      expiresAt: Date.now() + METADATA_CACHE_TTL_MS,
+    });
+  }
+
+  public clear(): void {
+    this.cache.clear();
+  }
+}
+
+export const metadataCache = new MetadataCache();
+
 export class YtDlpService {
   /**
    * Safe execution of yt-dlp with strict argument arrays and process timeouts
@@ -295,6 +334,16 @@ export class YtDlpService {
   public static async fetchMetadata(
     validated: ValidatedYouTubeUrl
   ): Promise<MediaInfoResult> {
+    const cacheKey = `${validated.type}:${validated.id}`;
+    const cached = metadataCache.get(cacheKey);
+    if (cached) {
+      logger.info(`Metadata cache hit for ${cacheKey}`, {
+        type: validated.type,
+        id: validated.id,
+      });
+      return cached;
+    }
+
     const startTime = Date.now();
     logger.info(`Starting metadata extraction for type: ${validated.type}`, {
       type: validated.type,
@@ -316,11 +365,13 @@ export class YtDlpService {
           validated.normalizedUrl,
         ];
       } else {
-        // Safe single-video extraction
+        // Safe single-video extraction with android player client for fast and reliable extraction
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
+          '--extractor-args',
+          'youtube:player_client=android',
           '--skip-download',
           validated.normalizedUrl,
         ];
@@ -336,13 +387,17 @@ export class YtDlpService {
         throw new AppError('METADATA_FAILED', 'Could not parse media metadata.', 500);
       }
 
+      let result: MediaInfoResult;
       // Check if yt-dlp returned a playlist
       if (parsed._type === 'playlist' || validated.type === 'playlist') {
-        return this.normalizePlaylist(parsed, validated);
+        result = this.normalizePlaylist(parsed, validated);
+      } else {
+        // Single video
+        result = this.normalizeSingleVideo(parsed, validated);
       }
 
-      // Single video
-      return this.normalizeSingleVideo(parsed, validated);
+      metadataCache.set(cacheKey, result);
+      return result;
     } finally {
       const duration = Date.now() - startTime;
       logger.info(`Finished metadata extraction for id: ${validated.id} in ${duration}ms`);
@@ -388,14 +443,21 @@ export class YtDlpService {
     }
 
     const items: PlaylistItem[] = [];
+    const seenIds = new Set<string>();
     let index = 1;
 
     for (const entry of rawEntries) {
       if (!entry || !entry.id) continue;
 
+      let itemId = entry.id;
+      if (seenIds.has(itemId)) {
+        itemId = `${entry.id}_${index}`;
+      }
+      seenIds.add(itemId);
+
       const duration = entry.duration || 0;
       items.push({
-        id: entry.id,
+        id: itemId,
         title: entry.title || `Video #${index}`,
         thumbnail: getBestThumbnail(entry),
         duration,

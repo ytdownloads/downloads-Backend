@@ -26,7 +26,7 @@ const envSchema = z.object({
   DOWNLOAD_TIMEOUT_MS: z.coerce.number().positive().default(600000),
   FFMPEG_TIMEOUT_MS: z.coerce.number().positive().default(1800000),
   INFO_TIMEOUT_MS: z.coerce.number().positive().default(60000),
-  MAX_PLAYLIST_ITEMS: z.coerce.number().positive().default(100),
+  MAX_PLAYLIST_ITEMS: z.coerce.number().positive().max(500).default(500),
   JOB_CLEANUP_DELAY_MS: z.coerce.number().positive().default(300000),
   TEMP_DIR: z.string().default(path.resolve(process.cwd(), 'temp_downloads')),
   RATE_LIMIT_MAX: z.coerce.number().positive().default(500),
