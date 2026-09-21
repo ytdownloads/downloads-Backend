@@ -53,7 +53,7 @@ export class DownloadService {
       '--windows-filenames',
       '--no-warnings',
       '--extractor-args',
-      'youtube:player_client=android',
+      'youtube:player_client=web,ios,android',
       '--no-mtime',
       '--buffer-size',
       '1024k',

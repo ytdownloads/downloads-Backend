@@ -371,7 +371,7 @@ export class YtDlpService {
           '--no-playlist',
           '--no-warnings',
           '--extractor-args',
-          'youtube:player_client=android',
+          'youtube:player_client=web,ios,android',
           '--skip-download',
           validated.normalizedUrl,
         ];
