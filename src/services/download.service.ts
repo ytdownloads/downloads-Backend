@@ -7,7 +7,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { validateYouTubeUrl } from './urlValidation.service.js';
 import { jobRegistry, DownloadJob } from './jobRegistry.service.js';
 import { sanitizeCleanFilename } from '../utils/filename.js';
-import { metadataCache } from './ytdlp.service.js';
+import { metadataCache, getCookieArgs } from './ytdlp.service.js';
 
 const VALID_VIDEO_FORMAT_REGEX = /^video-(\d{3,4})p$/;
 
@@ -61,7 +61,7 @@ export class DownloadService {
       '--windows-filenames',
       '--no-warnings',
       '--extractor-args',
-      'youtube:player_client=android_vr,android,ios,web',
+      'youtube:player_client=android_vr,tv_embedded,web',
       '--no-mtime',
       '--buffer-size',
       '1024k',
@@ -69,6 +69,7 @@ export class DownloadService {
       '10M',
       '--concurrent-fragments',
       '4',
+      ...getCookieArgs(),
       '--paths',
       `home:${job.tempDir}`,
       '--output',

@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -13,6 +16,24 @@ import {
 
 // Maximum buffer for yt-dlp JSON stdout (15 MB to accommodate playlists)
 const MAX_STDOUT_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Generates --cookies argument if YOUTUBE_COOKIES environment variable is provided
+ */
+export function getCookieArgs(): string[] {
+  const cookies = env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIES;
+  if (!cookies || !cookies.trim()) {
+    return [];
+  }
+  const cookieFilePath = path.join(os.tmpdir(), 'ytdl_cookies.txt');
+  try {
+    fs.writeFileSync(cookieFilePath, cookies.trim(), 'utf-8');
+    return ['--cookies', cookieFilePath];
+  } catch (err) {
+    logger.warn('Failed to write YOUTUBE_COOKIES to temp file', { error: String(err) });
+    return [];
+  }
+}
 
 export function formatDuration(seconds?: number): string {
   if (seconds === undefined || seconds === null || isNaN(seconds) || seconds < 0) {
@@ -217,6 +238,7 @@ export async function resolveCanonicalYouTubeId(rawId: string): Promise<string> 
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
       },
+      signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return rawId;
     const html = await res.text();
@@ -323,6 +345,23 @@ export class YtDlpService {
         logger.warn('yt-dlp exited with non-zero code', { code, stderrSample: lowerStderr.slice(0, 200) });
 
         if (
+          lowerStderr.includes('sign in to confirm you’re not a bot') ||
+          lowerStderr.includes('sign in to confirm') ||
+          lowerStderr.includes('not a bot') ||
+          lowerStderr.includes('bot detection') ||
+          lowerStderr.includes('automated queries')
+        ) {
+          return reject(
+            new AppError(
+              'BOT_DETECTION_BLOCKED',
+              'YouTube requires bot verification on this cloud server. Please configure the YOUTUBE_COOKIES environment variable in Render.',
+              503,
+              { stderrSample: lowerStderr.slice(0, 500) }
+            )
+          );
+        }
+
+        if (
           lowerStderr.includes('video unavailable') ||
           lowerStderr.includes('is unavailable') ||
           lowerStderr.includes('private video') ||
@@ -420,6 +459,7 @@ export class YtDlpService {
           String(env.MAX_PLAYLIST_ITEMS + 1),
           '--no-warnings',
           '--skip-download',
+          ...getCookieArgs(),
           validated.normalizedUrl,
         ];
       } else {
@@ -429,8 +469,9 @@ export class YtDlpService {
           '--no-playlist',
           '--no-warnings',
           '--extractor-args',
-          'youtube:player_client=android_vr,android,ios,web',
+          'youtube:player_client=android_vr,tv_embedded,web',
           '--skip-download',
+          ...getCookieArgs(),
           validated.normalizedUrl,
         ];
       }
@@ -441,13 +482,14 @@ export class YtDlpService {
       } catch (err) {
         // If extraction with android_vr player client failed, retry with default client arguments
         if (validated.type === 'video') {
-          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with default client args...`);
+          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with fallback client args...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--skip-download',
+              ...getCookieArgs(),
               validated.normalizedUrl,
             ];
             rawJson = await this.executeYtDlp(fallbackArgs);

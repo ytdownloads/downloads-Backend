@@ -8,6 +8,7 @@ import { logger } from '../utils/logger.js';
 import { BatchJob, batchJobRegistry } from './batchJobRegistry.service.js';
 import { BatchItemData } from '../types/download.types.js';
 import { sanitizeCleanFilename } from '../utils/filename.js';
+import { getCookieArgs } from './ytdlp.service.js';
 
 const VALID_VIDEO_FORMAT_REGEX = /^video-(\d{3,4})p$/;
 
@@ -106,7 +107,7 @@ export class PlaylistQueueService {
         '--windows-filenames',
         '--no-warnings',
         '--extractor-args',
-        'youtube:player_client=android_vr,android,ios,web',
+        'youtube:player_client=android_vr,tv_embedded,web',
         '--no-mtime',
         '--buffer-size',
         '1024k',
@@ -114,6 +115,7 @@ export class PlaylistQueueService {
         '10M',
         '--concurrent-fragments',
         '4',
+        ...getCookieArgs(),
         '--paths',
         `home:${itemDir}`,
         '--output',
