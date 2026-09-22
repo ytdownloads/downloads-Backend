@@ -21,7 +21,7 @@ for (const binPath of candidateBins) {
 const envSchema = z.object({
   PORT: z.coerce.number().default(5000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
-  FRONTEND_URL: z.string().default('http://localhost:5173'),
+  FRONTEND_URL: z.string().default('https://ytdownloads.github.io'),
   DOWNLOAD_CONCURRENCY: z.coerce.number().positive().default(2),
   DOWNLOAD_TIMEOUT_MS: z.coerce.number().positive().default(600000),
   FFMPEG_TIMEOUT_MS: z.coerce.number().positive().default(1800000),

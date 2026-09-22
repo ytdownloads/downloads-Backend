@@ -33,6 +33,13 @@ export function errorHandler(
     return;
   }
 
+  // CORS policy errors
+  if (err.message && err.message.includes('Blocked by CORS policy')) {
+    logger.warn(`Handled CORS error: ${err.message}`);
+    sendError(res, 'CORS_ERROR', err.message, 403);
+    return;
+  }
+
   // Unhandled internal server error
   logger.error('Unhandled server error:', {
     message: err.message,

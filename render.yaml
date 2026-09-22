@@ -24,4 +24,4 @@ services:
       - key: INFO_TIMEOUT_MS
         value: 60000
       - key: FRONTEND_URL
-        sync: false
+        value: https://ytdownloads.github.io

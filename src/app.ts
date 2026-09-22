@@ -21,29 +21,48 @@ export function createApp(): Express {
   );
 
   // CORS configuration
-  const allowedOrigins = env.FRONTEND_URL ? env.FRONTEND_URL.split(',').map((o) => o.trim()) : [];
-  app.use(
-    cors({
-      origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps, curl, postman)
-        if (!origin) return callback(null, true);
-        if (
-          env.NODE_ENV === 'development' ||
-          env.FRONTEND_URL === '*' ||
-          allowedOrigins.includes(origin) ||
-          origin === env.FRONTEND_URL ||
-          origin === 'http://localhost:5173' ||
-          origin === 'http://127.0.0.1:5173'
-        ) {
-          return callback(null, true);
-        }
-        return callback(new Error('Blocked by CORS policy'));
-      },
-      credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
-    })
-  );
+  const defaultOrigins = [
+    'https://ytdownloads.github.io',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ];
+
+  const configuredOrigins = [
+    ...(env.FRONTEND_URL ? env.FRONTEND_URL.split(',') : []),
+    ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : []),
+    ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : []),
+  ]
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+
+  const allowedOrigins = Array.from(new Set([...defaultOrigins, ...configuredOrigins]));
+
+  const corsOptions: cors.CorsOptions = {
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, server-to-server)
+      if (!origin) return callback(null, true);
+      const normalizedOrigin = origin.trim().replace(/\/+$/, '');
+      if (
+        env.NODE_ENV === 'development' ||
+        allowedOrigins.includes('*') ||
+        allowedOrigins.includes(normalizedOrigin) ||
+        normalizedOrigin === 'https://ytdownloads.github.io'
+      ) {
+        return callback(null, true);
+      }
+      return callback(new Error(`Blocked by CORS policy: origin ${origin} not allowed`));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+    exposedHeaders: ['Content-Disposition', 'Content-Length'],
+    maxAge: 86400,
+  };
+
+  app.use(cors(corsOptions));
+  app.options('*', cors(corsOptions));
 
   // Request size limiting & parsing
   app.use(express.json({ limit: '1mb' }));
