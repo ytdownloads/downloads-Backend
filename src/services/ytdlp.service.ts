@@ -283,10 +283,13 @@ export class YtDlpService {
 
         if (
           lowerStderr.includes('video unavailable') ||
+          lowerStderr.includes('is unavailable') ||
           lowerStderr.includes('private video') ||
           lowerStderr.includes('this video has been removed') ||
           lowerStderr.includes('not available in your country') ||
-          lowerStderr.includes('sign in to confirm your age')
+          lowerStderr.includes('sign in to confirm your age') ||
+          lowerStderr.includes('confirm your age') ||
+          lowerStderr.includes('members-only')
         ) {
           return reject(
             new AppError(
@@ -377,7 +380,80 @@ export class YtDlpService {
         ];
       }
 
-      const rawJson = await this.executeYtDlp(args);
+      let rawJson: string;
+      try {
+        rawJson = await this.executeYtDlp(args);
+      } catch (err) {
+        // If single video extraction failed, check if it's an 11-char video ID that can be resolved
+        // via YouTube search (handles case mismatches in video IDs from mobile share links or user input)
+        if (
+          validated.type === 'video' &&
+          validated.id &&
+          /^[A-Za-z0-9_-]{11}$/.test(validated.id)
+        ) {
+          logger.info(`Direct extraction failed for video ${validated.id}, attempting canonical search fallback...`);
+          try {
+            const searchArgs = [
+              '--dump-single-json',
+              '--no-playlist',
+              '--no-warnings',
+              '--skip-download',
+              `ytsearch1:${validated.id}`,
+            ];
+            const searchRaw = await this.executeYtDlp(searchArgs);
+            const searchParsed: RawYtDlpOutput = JSON.parse(searchRaw);
+            const entry = searchParsed.entries?.[0];
+            if (
+              entry &&
+              entry.id &&
+              entry.id.toLowerCase() === validated.id.toLowerCase()
+            ) {
+              logger.info(
+                `Resolved canonical video ID from search: ${validated.id} -> ${entry.id}`
+              );
+              const canonicalValidated: ValidatedYouTubeUrl = {
+                type: 'video',
+                id: entry.id,
+                normalizedUrl: `https://www.youtube.com/watch?v=${entry.id}`,
+              };
+              try {
+                const canonicalArgs = [
+                  '--dump-single-json',
+                  '--no-playlist',
+                  '--no-warnings',
+                  '--extractor-args',
+                  'youtube:player_client=web,ios,android',
+                  '--skip-download',
+                  canonicalValidated.normalizedUrl,
+                ];
+                rawJson = await this.executeYtDlp(canonicalArgs);
+                const resolvedResult = this.normalizeSingleVideo(
+                  JSON.parse(rawJson),
+                  canonicalValidated
+                );
+                metadataCache.set(cacheKey, resolvedResult);
+                metadataCache.set(`video:${entry.id}`, resolvedResult);
+                return resolvedResult;
+              } catch {
+                const fallbackResult = this.normalizeSingleVideo(
+                  entry,
+                  canonicalValidated
+                );
+                metadataCache.set(cacheKey, fallbackResult);
+                metadataCache.set(`video:${entry.id}`, fallbackResult);
+                return fallbackResult;
+              }
+            } else {
+              throw err;
+            }
+          } catch {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
+
       let parsed: RawYtDlpOutput;
 
       try {

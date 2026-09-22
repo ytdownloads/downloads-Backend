@@ -7,6 +7,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { validateYouTubeUrl } from './urlValidation.service.js';
 import { jobRegistry, DownloadJob } from './jobRegistry.service.js';
 import { sanitizeCleanFilename } from '../utils/filename.js';
+import { metadataCache } from './ytdlp.service.js';
 
 const VALID_VIDEO_FORMAT_REGEX = /^video-(\d{3,4})p$/;
 
@@ -40,8 +41,15 @@ export class DownloadService {
       );
     }
 
+    // Check if canonical URL is cached from metadata extraction
+    const cachedMeta = metadataCache.get(`video:${validated.id}`);
+    const downloadUrl =
+      cachedMeta && cachedMeta.type === 'video' && cachedMeta.webpageUrl
+        ? cachedMeta.webpageUrl
+        : validated.normalizedUrl;
+
     // 3. Create job in registry (handles concurrency limits)
-    const job = jobRegistry.createJob(validated.normalizedUrl, formatId);
+    const job = jobRegistry.createJob(downloadUrl, formatId);
 
     // 4. Ensure temporary job directory exists
     await fs.mkdir(job.tempDir, { recursive: true });
