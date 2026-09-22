@@ -202,6 +202,39 @@ class MetadataCache {
 
 export const metadataCache = new MetadataCache();
 
+/**
+ * Resolves the true case-sensitive YouTube video ID from YouTube search HTML in ~200ms
+ * (bypasses direct video URL case sensitivity without launching heavy subprocesses)
+ */
+export async function resolveCanonicalYouTubeId(rawId: string): Promise<string> {
+  if (!rawId || !/^[A-Za-z0-9_-]{11}$/.test(rawId)) {
+    return rawId;
+  }
+  try {
+    const res = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(rawId)}`, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    if (!res.ok) return rawId;
+    const html = await res.text();
+    const regex = /\/watch\?v=([A-Za-z0-9_-]{11})/g;
+    let match: RegExpExecArray | null;
+    const lowerRaw = rawId.toLowerCase();
+    while ((match = regex.exec(html)) !== null) {
+      const candidate = match[1];
+      if (candidate && candidate.toLowerCase() === lowerRaw) {
+        return candidate;
+      }
+    }
+  } catch {
+    // Return original rawId on fetch failure
+  }
+  return rawId;
+}
+
 export class YtDlpService {
   /**
    * Safe execution of yt-dlp with strict argument arrays and process timeouts
@@ -332,7 +365,8 @@ export class YtDlpService {
           new AppError(
             'METADATA_FAILED',
             'Failed to extract metadata for this YouTube link. Please check the URL and try again.',
-            400
+            400,
+            { stderrSample: lowerStderr.slice(0, 500) }
           )
         );
       });
@@ -345,6 +379,19 @@ export class YtDlpService {
   public static async fetchMetadata(
     validated: ValidatedYouTubeUrl
   ): Promise<MediaInfoResult> {
+    // For single videos, resolve canonical ID via YouTube search HTML first (handles case discrepancies)
+    if (validated.type === 'video' && validated.id && /^[A-Za-z0-9_-]{11}$/.test(validated.id)) {
+      const canonicalId = await resolveCanonicalYouTubeId(validated.id);
+      if (canonicalId && canonicalId !== validated.id) {
+        logger.info(`Resolved canonical ID before extraction: ${validated.id} -> ${canonicalId}`);
+        validated = {
+          type: 'video',
+          id: canonicalId,
+          normalizedUrl: `https://www.youtube.com/watch?v=${canonicalId}`,
+        };
+      }
+    }
+
     const cacheKey = `${validated.type}:${validated.id}`;
     const cached = metadataCache.get(cacheKey);
     if (cached) {
@@ -392,82 +439,18 @@ export class YtDlpService {
       try {
         rawJson = await this.executeYtDlp(args);
       } catch (err) {
-        // If single video extraction failed, check if it's an 11-char video ID that can be resolved
-        // via YouTube search (handles case mismatches in video IDs from mobile share links or user input)
-        if (
-          validated.type === 'video' &&
-          validated.id &&
-          /^[A-Za-z0-9_-]{11}$/.test(validated.id)
-        ) {
-          logger.info(`Direct extraction failed for video ${validated.id}, attempting canonical search fallback...`);
+        // If extraction with android_vr player client failed, retry with default client arguments
+        if (validated.type === 'video') {
+          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with default client args...`);
           try {
-            const searchArgs = [
+            const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
-              '--extractor-args',
-              'youtube:player_client=android_vr,android,ios,web',
               '--skip-download',
-              `ytsearch1:${validated.id}`,
+              validated.normalizedUrl,
             ];
-            const searchRaw = await this.executeYtDlp(searchArgs);
-            const searchParsed: RawYtDlpOutput = JSON.parse(searchRaw);
-            const entry = searchParsed.entries?.[0];
-            if (
-              entry &&
-              entry.id &&
-              entry.id.toLowerCase() === validated.id.toLowerCase()
-            ) {
-              logger.info(
-                `Resolved canonical video ID from search: ${validated.id} -> ${entry.id}`
-              );
-              const canonicalValidated: ValidatedYouTubeUrl = {
-                type: 'video',
-                id: entry.id,
-                normalizedUrl: `https://www.youtube.com/watch?v=${entry.id}`,
-              };
-
-              // If the search entry already contains formats, normalize and return directly
-              if (entry.formats && entry.formats.length > 0) {
-                const resolvedResult = this.normalizeSingleVideo(
-                  entry,
-                  canonicalValidated
-                );
-                metadataCache.set(cacheKey, resolvedResult);
-                metadataCache.set(`video:${entry.id}`, resolvedResult);
-                return resolvedResult;
-              }
-
-              try {
-                const canonicalArgs = [
-                  '--dump-single-json',
-                  '--no-playlist',
-                  '--no-warnings',
-                  '--extractor-args',
-                  'youtube:player_client=android_vr,android,ios,web',
-                  '--skip-download',
-                  canonicalValidated.normalizedUrl,
-                ];
-                rawJson = await this.executeYtDlp(canonicalArgs);
-                const resolvedResult = this.normalizeSingleVideo(
-                  JSON.parse(rawJson),
-                  canonicalValidated
-                );
-                metadataCache.set(cacheKey, resolvedResult);
-                metadataCache.set(`video:${entry.id}`, resolvedResult);
-                return resolvedResult;
-              } catch {
-                const fallbackResult = this.normalizeSingleVideo(
-                  entry,
-                  canonicalValidated
-                );
-                metadataCache.set(cacheKey, fallbackResult);
-                metadataCache.set(`video:${entry.id}`, fallbackResult);
-                return fallbackResult;
-              }
-            } else {
-              throw err;
-            }
+            rawJson = await this.executeYtDlp(fallbackArgs);
           } catch {
             throw err;
           }
@@ -495,6 +478,7 @@ export class YtDlpService {
       }
 
       metadataCache.set(cacheKey, result);
+      metadataCache.set(`${validated.type}:${validated.id}`, result);
       return result;
     } finally {
       const duration = Date.now() - startTime;
