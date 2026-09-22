@@ -54,9 +54,17 @@ interface RawEntry {
   id?: string;
   title?: string;
   thumbnails?: RawThumbnail[];
+  thumbnail?: string;
   duration?: number;
   url?: string;
   webpage_url?: string;
+  channel?: string;
+  uploader?: string;
+  channel_id?: string;
+  uploader_id?: string;
+  view_count?: number;
+  upload_date?: string;
+  formats?: RawFormat[];
 }
 
 interface RawYtDlpOutput {
@@ -368,13 +376,13 @@ export class YtDlpService {
           validated.normalizedUrl,
         ];
       } else {
-        // Safe single-video extraction with android player client for fast and reliable extraction
+        // Safe single-video extraction with android_vr player client for fast and reliable extraction without SABR/PO blocks
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
           '--extractor-args',
-          'youtube:player_client=web,ios,android',
+          'youtube:player_client=android_vr,android,ios,web',
           '--skip-download',
           validated.normalizedUrl,
         ];
@@ -397,6 +405,8 @@ export class YtDlpService {
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
+              '--extractor-args',
+              'youtube:player_client=android_vr,android,ios,web',
               '--skip-download',
               `ytsearch1:${validated.id}`,
             ];
@@ -416,13 +426,25 @@ export class YtDlpService {
                 id: entry.id,
                 normalizedUrl: `https://www.youtube.com/watch?v=${entry.id}`,
               };
+
+              // If the search entry already contains formats, normalize and return directly
+              if (entry.formats && entry.formats.length > 0) {
+                const resolvedResult = this.normalizeSingleVideo(
+                  entry,
+                  canonicalValidated
+                );
+                metadataCache.set(cacheKey, resolvedResult);
+                metadataCache.set(`video:${entry.id}`, resolvedResult);
+                return resolvedResult;
+              }
+
               try {
                 const canonicalArgs = [
                   '--dump-single-json',
                   '--no-playlist',
                   '--no-warnings',
                   '--extractor-args',
-                  'youtube:player_client=web,ios,android',
+                  'youtube:player_client=android_vr,android,ios,web',
                   '--skip-download',
                   canonicalValidated.normalizedUrl,
                 ];
