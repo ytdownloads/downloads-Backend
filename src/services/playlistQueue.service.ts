@@ -577,7 +577,7 @@ export class PlaylistQueueService {
 
     // If an active or pending item was cancelled, advance queue
     if (wasActive || wasPending) {
-      this.next();
+      this.dispatch();
     }
   }
 
@@ -585,7 +585,7 @@ export class PlaylistQueueService {
     const job = batchJobRegistry.getBatchJob(batchJobId);
     if (!job) return;
     job.cancelAll();
-    this.next();
+    this.dispatch();
   }
 
   public retryBatch(batchJobId: string): void {
