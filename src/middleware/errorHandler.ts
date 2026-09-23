@@ -14,17 +14,23 @@ export class AppError extends Error {
     this.code = code;
     this.statusCode = statusCode;
     this.details = details;
+    Object.setPrototypeOf(this, new.target.prototype);
     Error.captureStackTrace(this, this.constructor);
   }
 }
 
 export function errorHandler(
-  err: Error | AppError,
+  err: any,
   _req: Request,
   res: Response,
   _next: NextFunction
 ): void {
-  if (err instanceof AppError) {
+  const isAppError =
+    err instanceof AppError ||
+    err?.name === 'AppError' ||
+    (typeof err?.code === 'string' && typeof err?.statusCode === 'number');
+
+  if (isAppError) {
     logger.warn(`Handled application error: [${err.code}] ${err.message}`, {
       code: err.code,
       statusCode: err.statusCode,
@@ -37,6 +43,24 @@ export function errorHandler(
   if (err.message && err.message.includes('Blocked by CORS policy')) {
     logger.warn(`Handled CORS error: ${err.message}`);
     sendError(res, 'CORS_ERROR', err.message, 403);
+    return;
+  }
+
+  // Fallback for bot detection in unhandled errors
+  const lowerMsg = (err.message || '').toLowerCase();
+  if (
+    lowerMsg.includes('sign in to confirm') ||
+    lowerMsg.includes('not a bot') ||
+    lowerMsg.includes('bot detection') ||
+    lowerMsg.includes('automated queries')
+  ) {
+    logger.warn('Handled bot detection in error handler fallback');
+    sendError(
+      res,
+      'BOT_DETECTION_BLOCKED',
+      'YouTube is temporarily blocking this server from accessing the video. Please try again later.',
+      503
+    );
     return;
   }
 
