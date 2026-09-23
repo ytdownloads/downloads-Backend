@@ -61,7 +61,7 @@ export class DownloadService {
       '--windows-filenames',
       '--no-warnings',
       '--extractor-args',
-      'youtube:player_client=android_vr,tv_embedded,web',
+      'youtube:player_client=mweb,web',
       '--no-mtime',
       '--buffer-size',
       '1024k',
@@ -359,20 +359,44 @@ export class DownloadService {
       stderrSample: lowerStderr.slice(0, 300),
     });
 
+    if (
+      lowerStderr.includes('sign in to confirm') ||
+      lowerStderr.includes('not a bot') ||
+      lowerStderr.includes('bot detection') ||
+      lowerStderr.includes('automated queries')
+    ) {
+      job.fail(
+        'BOT_DETECTION_BLOCKED',
+        'YouTube requires bot verification on this cloud server. Please configure the YOUTUBE_COOKIES environment variable in Render.',
+        { stderrSample: lowerStderr.slice(0, 500) }
+      );
+      return;
+    }
+
+    if (lowerStderr.includes('http error 403') || lowerStderr.includes('403: forbidden')) {
+      job.fail(
+        'DOWNLOAD_FORBIDDEN',
+        'YouTube throttled or blocked direct streaming for this video on the server.',
+        { stderrSample: lowerStderr.slice(0, 500) }
+      );
+      return;
+    }
+
     if (lowerStderr.includes('ffmpeg') || lowerStderr.includes('conversion failed')) {
-      job.fail('FFMPEG_FAILED', 'Media conversion / stream merging failed.');
+      job.fail('FFMPEG_FAILED', 'Media conversion / stream merging failed.', { stderrSample: lowerStderr.slice(0, 500) });
       return;
     }
 
     if (
       lowerStderr.includes('video unavailable') ||
+      lowerStderr.includes('is unavailable') ||
       lowerStderr.includes('private video') ||
       lowerStderr.includes('removed')
     ) {
-      job.fail('VIDEO_UNAVAILABLE', 'This video is private, unavailable, or restricted.');
+      job.fail('VIDEO_UNAVAILABLE', 'This video is private, unavailable, or restricted.', { stderrSample: lowerStderr.slice(0, 500) });
       return;
     }
 
-    job.fail('DOWNLOAD_FAILED', 'Failed to complete video download. Please try again.');
+    job.fail('DOWNLOAD_FAILED', 'Failed to complete video download. Please try again.', { stderrSample: lowerStderr.slice(0, 500) });
   }
 }

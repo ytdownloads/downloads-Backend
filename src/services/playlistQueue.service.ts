@@ -107,7 +107,7 @@ export class PlaylistQueueService {
         '--windows-filenames',
         '--no-warnings',
         '--extractor-args',
-        'youtube:player_client=android_vr,tv_embedded,web',
+        'youtube:player_client=mweb,web',
         '--no-mtime',
         '--buffer-size',
         '1024k',

@@ -19,7 +19,7 @@ export class DownloadJob {
   public outputFilePath?: string;
   public fileName?: string;
   public fileSize?: number;
-  public error?: { code: string; message: string };
+  public error?: { code: string; message: string; details?: unknown };
   public childProcess?: ChildProcess;
   public readonly createdAt: number;
   public updatedAt: number;
@@ -108,8 +108,8 @@ export class DownloadJob {
     this.scheduleCleanup(env.JOB_CLEANUP_DELAY_MS);
   }
 
-  public fail(code: string, message: string): void {
-    this.error = { code, message };
+  public fail(code: string, message: string, details?: unknown): void {
+    this.error = { code, message, details };
     this.status = 'failed';
     this.progress = {
       ...this.progress,
