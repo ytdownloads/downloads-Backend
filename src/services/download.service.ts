@@ -365,19 +365,23 @@ export class DownloadService {
       lowerStderr.includes('bot detection') ||
       lowerStderr.includes('automated queries')
     ) {
+      logger.warn('Download blocked by YouTube bot detection. Note for deployment owner: YOUTUBE_COOKIES can be configured on Render.', {
+        jobId: job.jobId,
+      });
       job.fail(
         'BOT_DETECTION_BLOCKED',
-        'YouTube requires bot verification on this cloud server. Please configure the YOUTUBE_COOKIES environment variable in Render.',
-        { stderrSample: lowerStderr.slice(0, 500) }
+        'YouTube is temporarily blocking this server from accessing the video. Please try again later.'
       );
       return;
     }
 
     if (lowerStderr.includes('http error 403') || lowerStderr.includes('403: forbidden')) {
+      logger.warn('Download throttled by YouTube direct streaming restrictions (403 Forbidden). Note for deployment owner: YOUTUBE_COOKIES can be configured on Render.', {
+        jobId: job.jobId,
+      });
       job.fail(
         'DOWNLOAD_FORBIDDEN',
-        'YouTube throttled or blocked direct streaming for this video on the server.',
-        { stderrSample: lowerStderr.slice(0, 500) }
+        'YouTube is temporarily blocking direct streaming for this video on the server. Please try again later.'
       );
       return;
     }

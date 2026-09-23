@@ -474,6 +474,29 @@ export class PlaylistQueueService {
       return;
     }
 
+    if (
+      lowerStderr.includes('sign in to confirm') ||
+      lowerStderr.includes('not a bot') ||
+      lowerStderr.includes('bot detection') ||
+      lowerStderr.includes('automated queries')
+    ) {
+      batchJob.failItem(
+        itemId,
+        'BOT_DETECTION_BLOCKED',
+        'YouTube is temporarily blocking this server from accessing the video. Please try again later.'
+      );
+      return;
+    }
+
+    if (lowerStderr.includes('http error 403') || lowerStderr.includes('403: forbidden')) {
+      batchJob.failItem(
+        itemId,
+        'DOWNLOAD_FORBIDDEN',
+        'YouTube is temporarily blocking direct streaming for this video on the server. Please try again later.'
+      );
+      return;
+    }
+
     if (lowerStderr.includes('ffmpeg') || lowerStderr.includes('conversion failed')) {
       batchJob.failItem(itemId, 'FFMPEG_FAILED', 'Media stream merging failed.');
       return;

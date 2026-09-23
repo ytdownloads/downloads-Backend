@@ -351,12 +351,14 @@ export class YtDlpService {
           lowerStderr.includes('bot detection') ||
           lowerStderr.includes('automated queries')
         ) {
+          logger.warn('YouTube challenged server IP with bot detection. Note for deployment owner: YOUTUBE_COOKIES can be set in Render environment variables to authenticate cloud requests.', {
+            code,
+          });
           return reject(
             new AppError(
               'BOT_DETECTION_BLOCKED',
-              'YouTube requires bot verification on this cloud server. Please configure the YOUTUBE_COOKIES environment variable in Render.',
-              503,
-              { stderrSample: lowerStderr.slice(0, 500) }
+              'YouTube is temporarily blocking this server from accessing the video. Please try again later.',
+              503
             )
           );
         }
