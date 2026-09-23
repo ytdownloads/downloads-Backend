@@ -5,6 +5,7 @@ const YOUTUBE_HOSTNAMES = new Set([
   'youtube.com',
   'www.youtube.com',
   'm.youtube.com',
+  'music.youtube.com',
   'youtu.be',
 ]);
 
@@ -62,9 +63,9 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
     throw new AppError('INVALID_URL', 'The provided string is not a valid URL.', 400);
   }
 
-  // Enforce HTTPS protocol
-  if (parsed.protocol !== 'https:') {
-    throw new AppError('INVALID_URL', 'Only secure HTTPS YouTube URLs are supported.', 400);
+  // Enforce HTTP / HTTPS protocol
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new AppError('INVALID_URL', 'Only HTTP and HTTPS YouTube URLs are supported.', 400);
   }
 
   // Enforce exact YouTube hostnames (no subdomains like evil.youtube.com.attacker.com)
@@ -159,7 +160,8 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
 
   // Shorts video URLs (e.g. https://www.youtube.com/shorts/VIDEO_ID)
   if (parsed.pathname.toLowerCase().startsWith('/shorts/')) {
-    const videoId = parsed.pathname.slice('/shorts/'.length).split('/')[0];
+    const rawVideoId = parsed.pathname.slice('/shorts/'.length).split('/')[0];
+    const videoId = cleanVideoId(rawVideoId);
     if (!videoId || !VIDEO_ID_REGEX.test(videoId)) {
       throw new AppError('INVALID_URL', 'Invalid YouTube shorts video ID.', 400);
     }
@@ -171,10 +173,26 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
     };
   }
 
-  // Other unsupported YouTube endpoints (channels, user pages, embeds, feeds)
+  // Embed video URLs (e.g. https://www.youtube.com/embed/VIDEO_ID or /v/VIDEO_ID)
+  if (parsed.pathname.toLowerCase().startsWith('/embed/') || parsed.pathname.toLowerCase().startsWith('/v/')) {
+    const prefix = parsed.pathname.toLowerCase().startsWith('/embed/') ? '/embed/' : '/v/';
+    const rawVideoId = parsed.pathname.slice(prefix.length).split('/')[0];
+    const videoId = cleanVideoId(rawVideoId);
+    if (!videoId || !VIDEO_ID_REGEX.test(videoId)) {
+      throw new AppError('INVALID_URL', 'Invalid YouTube embed video ID.', 400);
+    }
+
+    return {
+      type: 'video',
+      id: videoId,
+      normalizedUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`,
+    };
+  }
+
+  // Other unsupported YouTube endpoints (channels, user pages, feeds)
   throw new AppError(
     'UNSUPPORTED_URL',
-    'Only direct YouTube video and playlist links are supported.',
+    'Only direct YouTube video, short, and playlist links are supported.',
     400
   );
 }
