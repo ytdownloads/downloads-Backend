@@ -69,6 +69,8 @@ export class DownloadService {
       '4',
       '--extractor-args',
       'youtube:player_client=web_embedded,mweb',
+      '--js-runtimes',
+      'node',
       ...getCookieArgs(),
       '--paths',
       `home:${job.tempDir}`,

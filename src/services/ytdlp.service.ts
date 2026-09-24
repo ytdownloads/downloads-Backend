@@ -459,6 +459,8 @@ export class YtDlpService {
           '--no-warnings',
           '--skip-download',
           '--ignore-no-formats-error',
+          '--js-runtimes',
+          'node',
           ...getCookieArgs(),
           validated.normalizedUrl,
         ];
@@ -472,6 +474,8 @@ export class YtDlpService {
           'youtube:player_client=web_embedded,mweb',
           '--skip-download',
           '--ignore-no-formats-error',
+          '--js-runtimes',
+          'node',
           ...getCookieArgs(),
           validated.normalizedUrl,
         ];
@@ -493,6 +497,8 @@ export class YtDlpService {
               'youtube:player_client=mweb',
               '--skip-download',
               '--ignore-no-formats-error',
+              '--js-runtimes',
+              'node',
               ...getCookieArgs(),
               validated.normalizedUrl,
             ];
@@ -521,6 +527,28 @@ export class YtDlpService {
       } else {
         // Single video
         result = this.normalizeSingleVideo(parsed, validated);
+        if (result.type === 'video' && result.formats.length === 0) {
+          logger.info(`0 formats extracted for ${validated.id}, retrying with mweb client...`);
+          try {
+            const fallbackArgs = [
+              '--dump-single-json',
+              '--no-playlist',
+              '--no-warnings',
+              '--extractor-args',
+              'youtube:player_client=mweb',
+              '--skip-download',
+              '--js-runtimes',
+              'node',
+              ...getCookieArgs(),
+              validated.normalizedUrl,
+            ];
+            const fallbackJson = await this.executeYtDlp(fallbackArgs);
+            const fallbackParsed = JSON.parse(fallbackJson);
+            result = this.normalizeSingleVideo(fallbackParsed, validated);
+          } catch {
+            // Keep original result if fallback fails
+          }
+        }
       }
 
       metadataCache.set(cacheKey, result);

@@ -115,6 +115,8 @@ export class PlaylistQueueService {
         '4',
         '--extractor-args',
         'youtube:player_client=web_embedded,mweb',
+        '--js-runtimes',
+        'node',
         ...getCookieArgs(),
         '--paths',
         `home:${itemDir}`,
