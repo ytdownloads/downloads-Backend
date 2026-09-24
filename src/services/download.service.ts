@@ -60,8 +60,6 @@ export class DownloadService {
       '--no-playlist',
       '--windows-filenames',
       '--no-warnings',
-      '--extractor-args',
-      'youtube:player_client=tv_embedded,android_vr,mweb,web',
       '--no-mtime',
       '--buffer-size',
       '1024k',

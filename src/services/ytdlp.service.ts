@@ -314,7 +314,7 @@ export class YtDlpService {
             new AppError(
               'YTDLP_NOT_AVAILABLE',
               'The yt-dlp media engine is not installed or not found on the server PATH.',
-              500
+              503
             )
           );
         }
@@ -465,13 +465,10 @@ export class YtDlpService {
           validated.normalizedUrl,
         ];
       } else {
-        // Safe single-video extraction with android_vr player client for fast and reliable extraction without SABR/PO blocks
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
-          '--extractor-args',
-          'youtube:player_client=android_vr,tv_embedded,web',
           '--skip-download',
           ...getCookieArgs(),
           validated.normalizedUrl,

@@ -11,6 +11,7 @@ const candidateBins = [
   path.resolve(process.cwd(), 'bin'),
   path.resolve(process.cwd(), '..', 'bin'),
   path.resolve(process.cwd(), 'backend', 'bin'),
+  path.resolve(process.cwd(), 'node_modules', '.bin'),
 ];
 for (const binPath of candidateBins) {
   if (fs.existsSync(binPath)) {
