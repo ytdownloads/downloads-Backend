@@ -346,9 +346,7 @@ export class YtDlpService {
 
         if (
           lowerStderr.includes('sign in to confirm you’re not a bot') ||
-          lowerStderr.includes('sign in to confirm') ||
-          lowerStderr.includes('not a bot') ||
-          lowerStderr.includes('bot detection') ||
+          lowerStderr.includes('sign in to confirm you\'re not a bot') ||
           lowerStderr.includes('automated queries')
         ) {
           logger.warn('YouTube challenged server IP with bot detection. Note for deployment owner: YOUTUBE_COOKIES can be set in Render environment variables to authenticate cloud requests.', {
@@ -364,19 +362,31 @@ export class YtDlpService {
         }
 
         if (
+          lowerStderr.includes('sign in to confirm your age') ||
+          lowerStderr.includes('confirm your age') ||
+          lowerStderr.includes('age-restricted')
+        ) {
+          return reject(
+            new AppError(
+              'AGE_RESTRICTED',
+              'This video is age-restricted and requires sign-in.',
+              403
+            )
+          );
+        }
+
+        if (
           lowerStderr.includes('video unavailable') ||
           lowerStderr.includes('is unavailable') ||
           lowerStderr.includes('private video') ||
           lowerStderr.includes('this video has been removed') ||
           lowerStderr.includes('not available in your country') ||
-          lowerStderr.includes('sign in to confirm your age') ||
-          lowerStderr.includes('confirm your age') ||
           lowerStderr.includes('members-only')
         ) {
           return reject(
             new AppError(
               'VIDEO_UNAVAILABLE',
-              'This video is unavailable, private, age-restricted, or removed.',
+              'This video is unavailable, private, or removed.',
               404
             )
           );
@@ -420,19 +430,6 @@ export class YtDlpService {
   public static async fetchMetadata(
     validated: ValidatedYouTubeUrl
   ): Promise<MediaInfoResult> {
-    // For single videos, resolve canonical ID via YouTube search HTML first (handles case discrepancies)
-    if (validated.type === 'video' && validated.id && /^[A-Za-z0-9_-]{11}$/.test(validated.id)) {
-      const canonicalId = await resolveCanonicalYouTubeId(validated.id);
-      if (canonicalId && canonicalId !== validated.id) {
-        logger.info(`Resolved canonical ID before extraction: ${validated.id} -> ${canonicalId}`);
-        validated = {
-          type: 'video',
-          id: canonicalId,
-          normalizedUrl: `https://www.youtube.com/watch?v=${canonicalId}`,
-        };
-      }
-    }
-
     const cacheKey = `${validated.type}:${validated.id}`;
     const cached = metadataCache.get(cacheKey);
     if (cached) {
@@ -465,10 +462,13 @@ export class YtDlpService {
           validated.normalizedUrl,
         ];
       } else {
+        // Use web_embedded,web player client for maximum reliability and avoiding datacenter blocks
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
+          '--extractor-args',
+          'youtube:player_client=web_embedded,web',
           '--skip-download',
           ...getCookieArgs(),
           validated.normalizedUrl,
@@ -479,9 +479,9 @@ export class YtDlpService {
       try {
         rawJson = await this.executeYtDlp(args);
       } catch (err) {
-        // If extraction with android_vr player client failed, retry with default client arguments
+        // Fallback retry with default extraction
         if (validated.type === 'video') {
-          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with fallback client args...`);
+          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with fallback default args...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',

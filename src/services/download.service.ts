@@ -67,6 +67,8 @@ export class DownloadService {
       '10M',
       '--concurrent-fragments',
       '4',
+      '--extractor-args',
+      'youtube:player_client=web_embedded,web',
       ...getCookieArgs(),
       '--paths',
       `home:${job.tempDir}`,
@@ -358,8 +360,20 @@ export class DownloadService {
     });
 
     if (
-      lowerStderr.includes('sign in to confirm') ||
-      lowerStderr.includes('not a bot') ||
+      lowerStderr.includes('sign in to confirm your age') ||
+      lowerStderr.includes('confirm your age') ||
+      lowerStderr.includes('age-restricted')
+    ) {
+      job.fail(
+        'AGE_RESTRICTED',
+        'This video is age-restricted and requires sign-in.'
+      );
+      return;
+    }
+
+    if (
+      lowerStderr.includes('sign in to confirm you’re not a bot') ||
+      lowerStderr.includes('sign in to confirm you\'re not a bot') ||
       lowerStderr.includes('bot detection') ||
       lowerStderr.includes('automated queries')
     ) {

@@ -113,6 +113,8 @@ export class PlaylistQueueService {
         '10M',
         '--concurrent-fragments',
         '4',
+        '--extractor-args',
+        'youtube:player_client=web_embedded,web',
         ...getCookieArgs(),
         '--paths',
         `home:${itemDir}`,
@@ -473,8 +475,17 @@ export class PlaylistQueueService {
     }
 
     if (
-      lowerStderr.includes('sign in to confirm') ||
-      lowerStderr.includes('not a bot') ||
+      lowerStderr.includes('sign in to confirm your age') ||
+      lowerStderr.includes('confirm your age') ||
+      lowerStderr.includes('age-restricted')
+    ) {
+      batchJob.failItem(itemId, 'AGE_RESTRICTED', 'This video is age-restricted and requires sign-in.');
+      return;
+    }
+
+    if (
+      lowerStderr.includes('sign in to confirm you’re not a bot') ||
+      lowerStderr.includes('sign in to confirm you\'re not a bot') ||
       lowerStderr.includes('bot detection') ||
       lowerStderr.includes('automated queries')
     ) {
