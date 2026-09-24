@@ -462,13 +462,13 @@ export class YtDlpService {
           validated.normalizedUrl,
         ];
       } else {
-        // Use web_embedded,web player client for maximum reliability and avoiding datacenter blocks
+        // Use web_embedded player client for maximum reliability and avoiding datacenter bot detection
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
           '--extractor-args',
-          'youtube:player_client=web_embedded,web',
+          'youtube:player_client=web_embedded',
           '--skip-download',
           ...getCookieArgs(),
           validated.normalizedUrl,
@@ -479,14 +479,16 @@ export class YtDlpService {
       try {
         rawJson = await this.executeYtDlp(args);
       } catch (err) {
-        // Fallback retry with default extraction
+        // Fallback retry with mweb client (also safe on cloud IPs)
         if (validated.type === 'video') {
-          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with fallback default args...`);
+          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with mweb client args...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
+              '--extractor-args',
+              'youtube:player_client=mweb',
               '--skip-download',
               ...getCookieArgs(),
               validated.normalizedUrl,
