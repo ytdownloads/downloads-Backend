@@ -458,18 +458,20 @@ export class YtDlpService {
           String(env.MAX_PLAYLIST_ITEMS + 1),
           '--no-warnings',
           '--skip-download',
+          '--ignore-no-formats-error',
           ...getCookieArgs(),
           validated.normalizedUrl,
         ];
       } else {
-        // Use web_embedded player client for maximum reliability and avoiding datacenter bot detection
+        // Use web_embedded,mweb player client for maximum reliability and avoiding datacenter bot detection
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
           '--extractor-args',
-          'youtube:player_client=web_embedded',
+          'youtube:player_client=web_embedded,mweb',
           '--skip-download',
+          '--ignore-no-formats-error',
           ...getCookieArgs(),
           validated.normalizedUrl,
         ];
@@ -490,6 +492,7 @@ export class YtDlpService {
               '--extractor-args',
               'youtube:player_client=mweb',
               '--skip-download',
+              '--ignore-no-formats-error',
               ...getCookieArgs(),
               validated.normalizedUrl,
             ];

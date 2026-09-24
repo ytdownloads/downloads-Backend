@@ -114,7 +114,7 @@ export class PlaylistQueueService {
         '--concurrent-fragments',
         '4',
         '--extractor-args',
-        'youtube:player_client=web_embedded',
+        'youtube:player_client=web_embedded,mweb',
         ...getCookieArgs(),
         '--paths',
         `home:${itemDir}`,
