@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { sendSuccess } from '../utils/response.js';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { getCookieArgs } from '../services/ytdlp.service.js';
 
 const execAsync = promisify(exec);
 let cachedYtdlpVersion = '';
@@ -40,6 +41,7 @@ export async function postDiagnose(req: Request, res: Response): Promise<void> {
     '--skip-download',
     '--js-runtimes',
     `node:${process.execPath}`,
+    ...getCookieArgs(),
   ];
   if (client) {
     args.push('--extractor-args', `youtube:player_client=${client}`);

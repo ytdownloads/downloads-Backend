@@ -18,21 +18,27 @@ import {
 const MAX_STDOUT_BYTES = 15 * 1024 * 1024;
 
 /**
- * Generates --cookies argument if YOUTUBE_COOKIES environment variable is provided
+ * Generates --cookies argument if YOUTUBE_COOKIES environment variable or project cookies.txt is provided
  */
 export function getCookieArgs(): string[] {
   const cookies = env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIES;
-  if (!cookies || !cookies.trim()) {
-    return [];
+  if (cookies && cookies.trim()) {
+    const cookieFilePath = path.join(os.tmpdir(), 'ytdl_cookies.txt');
+    try {
+      fs.writeFileSync(cookieFilePath, cookies.trim(), 'utf-8');
+      return ['--cookies', cookieFilePath];
+    } catch (err) {
+      logger.warn('Failed to write YOUTUBE_COOKIES to temp file', { error: String(err) });
+    }
   }
-  const cookieFilePath = path.join(os.tmpdir(), 'ytdl_cookies.txt');
-  try {
-    fs.writeFileSync(cookieFilePath, cookies.trim(), 'utf-8');
-    return ['--cookies', cookieFilePath];
-  } catch (err) {
-    logger.warn('Failed to write YOUTUBE_COOKIES to temp file', { error: String(err) });
-    return [];
+
+  // Fallback to project root cookies.txt if present
+  const projectCookiePath = path.resolve(process.cwd(), 'cookies.txt');
+  if (fs.existsSync(projectCookiePath)) {
+    return ['--cookies', projectCookiePath];
   }
+
+  return [];
 }
 
 export function formatDuration(seconds?: number): string {
