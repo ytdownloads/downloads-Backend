@@ -356,7 +356,8 @@ export class YtDlpService {
             new AppError(
               'BOT_DETECTION_BLOCKED',
               'YouTube is temporarily blocking this server from accessing the video. Please try again later.',
-              503
+              503,
+              { stderr: stderr.slice(0, 1000) }
             )
           );
         }
