@@ -1,16 +1,20 @@
 import { Request, Response } from 'express';
 import { sendSuccess } from '../utils/response.js';
+import { exec, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 
-import { execSync } from 'node:child_process';
-
+const execAsync = promisify(exec);
 let cachedYtdlpVersion = '';
 let cachedYtdlpPath = '';
 
-export function getHealthCheck(_req: Request, res: Response): void {
-  if (!cachedYtdlpVersion) {
+export async function getHealthCheck(_req: Request, res: Response): Promise<void> {
+  if (!cachedYtdlpVersion || cachedYtdlpVersion.startsWith('error')) {
     try {
-      cachedYtdlpVersion = execSync('yt-dlp --version', { encoding: 'utf-8', timeout: 3000 }).trim();
-      cachedYtdlpPath = execSync(process.platform === 'win32' ? 'where yt-dlp' : 'which yt-dlp', { encoding: 'utf-8', timeout: 3000 }).trim();
+      const { stdout: vOut } = await execAsync('yt-dlp --version', { timeout: 15000 });
+      cachedYtdlpVersion = vOut.trim();
+      const whichCmd = process.platform === 'win32' ? 'where yt-dlp' : 'which yt-dlp';
+      const { stdout: pOut } = await execAsync(whichCmd, { timeout: 15000 });
+      cachedYtdlpPath = pOut.trim();
     } catch (e) {
       cachedYtdlpVersion = 'error: ' + String(e);
     }
@@ -23,4 +27,61 @@ export function getHealthCheck(_req: Request, res: Response): void {
     ytdlpVersion: cachedYtdlpVersion,
     ytdlpPath: cachedYtdlpPath,
   }, 200);
+}
+
+export async function postDiagnose(req: Request, res: Response): Promise<void> {
+  const client = (req.body?.client as string) || '';
+  const url = (req.body?.url as string) || 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+  
+  const args = [
+    '--dump-single-json',
+    '--no-playlist',
+    '--no-warnings',
+    '--skip-download',
+    '--js-runtimes',
+    `node:${process.execPath}`,
+  ];
+  if (client) {
+    args.push('--extractor-args', `youtube:player_client=${client}`);
+  }
+  args.push(url);
+
+  try {
+    const child = spawn('yt-dlp', args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+    }, 25000);
+
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      let title = '';
+      let formatsCount = 0;
+      if (code === 0) {
+        try {
+          const parsed = JSON.parse(stdout);
+          title = parsed.title;
+          formatsCount = parsed.formats?.length || 0;
+        } catch {}
+      }
+      sendSuccess(res, {
+        code,
+        title,
+        formatsCount,
+        stdoutLength: stdout.length,
+        stderr: stderr.slice(0, 500),
+      }, 200);
+    });
+  } catch (err) {
+    sendSuccess(res, { error: String(err) }, 500);
+  }
 }
