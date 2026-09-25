@@ -75,8 +75,8 @@ async function main() {
   const ytdlpDest = path.join(binDir, 'yt-dlp');
   const nodeYtdlpDest = path.join(nodeBinDir, 'yt-dlp');
 
-  // 1. Install yt-dlp
-  if (!fs.existsSync(ytdlpDest) && !commandExists('yt-dlp')) {
+  // 1. Install yt-dlp (always ensure v2026.08.19 is present in bin/)
+  if (!fs.existsSync(ytdlpDest)) {
     console.log(`[install-binaries] Downloading standalone yt-dlp v${YTDLP_VERSION}...`);
     try {
       await downloadFile(YTDLP_URL, ytdlpDest);
@@ -87,19 +87,14 @@ async function main() {
     } catch (err) {
       console.error('[install-binaries] Failed to download yt-dlp:', err.message);
     }
-  } else if (fs.existsSync(ytdlpDest)) {
+  } else {
     fs.copyFileSync(ytdlpDest, nodeYtdlpDest);
     fs.chmodSync(nodeYtdlpDest, 0o755);
     console.log(`[install-binaries] yt-dlp already present at ${ytdlpDest}`);
-  } else {
-    console.log('[install-binaries] System yt-dlp detected.');
   }
 
   // 2. Install FFmpeg
-  const ffmpegDest = path.join(binDir, 'ffmpeg');
-  const nodeFfmpegDest = path.join(nodeBinDir, 'ffmpeg');
-
-  if (!fs.existsSync(ffmpegDest) && !commandExists('ffmpeg')) {
+  if (!fs.existsSync(ffmpegDest)) {
     console.log(`[install-binaries] Downloading static FFmpeg v${FFMPEG_VERSION}...`);
     const zipPath = path.join(binDir, 'ffmpeg.zip');
     try {
@@ -120,12 +115,10 @@ async function main() {
     } catch (err) {
       console.error('[install-binaries] Failed to download FFmpeg:', err.message);
     }
-  } else if (fs.existsSync(ffmpegDest)) {
+  } else {
     fs.copyFileSync(ffmpegDest, nodeFfmpegDest);
     fs.chmodSync(nodeFfmpegDest, 0o755);
     console.log(`[install-binaries] FFmpeg already present at ${ffmpegDest}`);
-  } else {
-    console.log('[install-binaries] System FFmpeg detected.');
   }
 }
 
