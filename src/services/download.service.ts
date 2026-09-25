@@ -69,6 +69,8 @@ export class DownloadService {
       '4',
       '--extractor-args',
       'youtube:player_client=android,web_embedded',
+      '--remote-components',
+      'ejs:github',
       '--js-runtimes',
       `node:${process.execPath}`,
       ...getCookieArgs(),

@@ -32,12 +32,6 @@ export function getCookieArgs(): string[] {
     }
   }
 
-  // Fallback to project root cookies.txt if present
-  const projectCookiePath = path.resolve(process.cwd(), 'cookies.txt');
-  if (fs.existsSync(projectCookiePath)) {
-    return ['--cookies', projectCookiePath];
-  }
-
   return [];
 }
 
@@ -505,6 +499,8 @@ export class YtDlpService {
           '--extractor-args',
           'youtube:player_client=android,web_embedded',
           '--skip-download',
+          '--remote-components',
+          'ejs:github',
           '--js-runtimes',
           `node:${process.execPath}`,
           ...getCookieArgs(),
@@ -519,6 +515,8 @@ export class YtDlpService {
           '--extractor-args',
           'youtube:player_client=android,web_embedded',
           '--skip-download',
+          '--remote-components',
+          'ejs:github',
           '--js-runtimes',
           `node:${process.execPath}`,
           ...getCookieArgs(),
@@ -541,6 +539,8 @@ export class YtDlpService {
               '--extractor-args',
               'youtube:player_client=android',
               '--skip-download',
+              '--remote-components',
+              'ejs:github',
               '--js-runtimes',
               `node:${process.execPath}`,
               ...getCookieArgs(),
@@ -581,6 +581,8 @@ export class YtDlpService {
               '--extractor-args',
               'youtube:player_client=android',
               '--skip-download',
+              '--remote-components',
+              'ejs:github',
               '--js-runtimes',
               `node:${process.execPath}`,
               ...getCookieArgs(),

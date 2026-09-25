@@ -7,8 +7,25 @@ import { getCookieArgs } from '../services/ytdlp.service.js';
 const execAsync = promisify(exec);
 let cachedYtdlpVersion = '';
 let cachedYtdlpPath = '';
+let cachedFfmpegVersion = '';
+let cachedFfmpegPath = '';
 
 export async function getHealthCheck(_req: Request, res: Response): Promise<void> {
+  // Allow safe simulation of unhealthy state for verification
+  if (_req.query.simulate === 'offline') {
+    res.status(503).json({
+      success: false,
+      status: 'offline',
+      data: {
+        status: 'offline',
+        ready: false,
+        message: 'Simulated server offline condition for verification',
+      },
+    });
+    return;
+  }
+
+  // 1. Verify yt-dlp
   if (!cachedYtdlpVersion || cachedYtdlpVersion.startsWith('error')) {
     try {
       const { stdout: vOut } = await execAsync('yt-dlp --version', { timeout: 15000 });
@@ -20,13 +37,51 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
       cachedYtdlpVersion = 'error: ' + String(e);
     }
   }
+
+  // 2. Verify FFmpeg
+  if (!cachedFfmpegVersion || cachedFfmpegVersion.startsWith('error')) {
+    try {
+      const { stdout: fOut } = await execAsync('ffmpeg -version', { timeout: 15000 });
+      cachedFfmpegVersion = fOut.split('\n')[0].trim();
+      const whichCmd = process.platform === 'win32' ? 'where ffmpeg' : 'which ffmpeg';
+      const { stdout: fpOut } = await execAsync(whichCmd, { timeout: 15000 });
+      cachedFfmpegPath = fpOut.trim();
+    } catch (e) {
+      cachedFfmpegVersion = 'error: ' + String(e);
+    }
+  }
+
+  const ytdlpHealthy = Boolean(cachedYtdlpVersion && !cachedYtdlpVersion.startsWith('error'));
+  const ffmpegHealthy = Boolean(cachedFfmpegVersion && !cachedFfmpegVersion.startsWith('error'));
+  const isReady = ytdlpHealthy && ffmpegHealthy;
+
+  if (!isReady) {
+    res.status(503).json({
+      success: false,
+      status: 'degraded',
+      data: {
+        status: 'degraded',
+        ready: false,
+        ytdlpVersion: cachedYtdlpVersion,
+        ytdlpPath: cachedYtdlpPath,
+        ffmpegVersion: cachedFfmpegVersion,
+        ffmpegPath: cachedFfmpegPath,
+        nodePath: process.execPath,
+      },
+    });
+    return;
+  }
+
   sendSuccess(res, {
     status: 'ok',
+    ready: true,
     version: '1.0.0',
-    engine: 'android',
+    engine: 'android,web_embedded',
     nodePath: process.execPath,
     ytdlpVersion: cachedYtdlpVersion,
     ytdlpPath: cachedYtdlpPath,
+    ffmpegVersion: cachedFfmpegVersion,
+    ffmpegPath: cachedFfmpegPath,
   }, 200);
 }
 
@@ -38,9 +93,10 @@ export async function postDiagnose(req: Request, res: Response): Promise<void> {
   const client = (req.body?.client as string) || '';
   const url = (req.body?.url as string) || 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
   const customCookies = (req.body?.cookies as string) || '';
+  const noCookies = Boolean(req.body?.noCookies || customCookies === 'NONE');
 
-  let cookieArgs = getCookieArgs();
-  if (customCookies) {
+  let cookieArgs = noCookies ? [] : getCookieArgs();
+  if (!noCookies && customCookies) {
     const customPath = path.join(os.tmpdir(), 'custom_cookies.txt');
     fs.writeFileSync(customPath, customCookies, 'utf-8');
     cookieArgs = ['--cookies', customPath];
@@ -51,6 +107,8 @@ export async function postDiagnose(req: Request, res: Response): Promise<void> {
     '--no-playlist',
     '--no-warnings',
     '--skip-download',
+    '--remote-components',
+    'ejs:github',
     '--js-runtimes',
     `node:${process.execPath}`,
     ...cookieArgs,
