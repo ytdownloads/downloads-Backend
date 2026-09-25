@@ -17,6 +17,17 @@ import {
 // Maximum buffer for yt-dlp JSON stdout (15 MB to accommodate playlists)
 const MAX_STDOUT_BYTES = 15 * 1024 * 1024;
 
+let lastBotBlockTimestamp = 0;
+
+export function recordBotBlock(): void {
+  lastBotBlockTimestamp = Date.now();
+}
+
+export function isBotBlockRecent(): boolean {
+  // Flagged as blocked if a bot challenge occurred in the last 3 minutes
+  return Date.now() - lastBotBlockTimestamp < 3 * 60 * 1000;
+}
+
 /**
  * Generates --cookies argument if YOUTUBE_COOKIES environment variable or project cookies.txt is provided
  */
@@ -387,6 +398,7 @@ export class YtDlpService {
           lowerStderr.includes('sign in to confirm you\'re not a bot') ||
           lowerStderr.includes('automated queries')
         ) {
+          recordBotBlock();
           logger.warn('YouTube challenged server IP with bot detection. Note for deployment owner: YOUTUBE_COOKIES can be set in Render environment variables to authenticate cloud requests.', {
             code,
           });

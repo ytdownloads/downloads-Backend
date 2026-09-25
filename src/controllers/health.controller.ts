@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { sendSuccess } from '../utils/response.js';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getCookieArgs } from '../services/ytdlp.service.js';
+import { getCookieArgs, isBotBlockRecent } from '../services/ytdlp.service.js';
 
 const execAsync = promisify(exec);
 let cachedYtdlpVersion = '';
@@ -11,7 +11,7 @@ let cachedFfmpegVersion = '';
 let cachedFfmpegPath = '';
 
 export async function getHealthCheck(_req: Request, res: Response): Promise<void> {
-  // Allow safe simulation of unhealthy state for verification
+  // Allow safe simulation of states for verification
   if (_req.query.simulate === 'offline') {
     res.status(503).json({
       success: false,
@@ -22,6 +22,22 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
         message: 'Simulated server offline condition for verification',
       },
     });
+    return;
+  }
+
+  if (_req.query.simulate === 'online') {
+    sendSuccess(res, {
+      status: 'ok',
+      ready: true,
+      simulated: true,
+      version: '1.0.0',
+      engine: 'android,web_embedded',
+      nodePath: process.execPath,
+      ytdlpVersion: cachedYtdlpVersion || '2026.08.19',
+      ytdlpPath: cachedYtdlpPath || '/usr/bin/yt-dlp',
+      ffmpegVersion: cachedFfmpegVersion || 'ffmpeg 5.1.9',
+      ffmpegPath: cachedFfmpegPath || '/usr/bin/ffmpeg',
+    }, 200);
     return;
   }
 
@@ -53,15 +69,20 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
 
   const ytdlpHealthy = Boolean(cachedYtdlpVersion && !cachedYtdlpVersion.startsWith('error'));
   const ffmpegHealthy = Boolean(cachedFfmpegVersion && !cachedFfmpegVersion.startsWith('error'));
-  const isReady = ytdlpHealthy && ffmpegHealthy;
+  const isBotBlocked = isBotBlockRecent();
+  const isReady = ytdlpHealthy && ffmpegHealthy && !isBotBlocked;
 
   if (!isReady) {
     res.status(503).json({
       success: false,
-      status: 'degraded',
+      status: 'offline',
       data: {
-        status: 'degraded',
+        status: 'offline',
         ready: false,
+        reason: isBotBlocked ? 'BOT_DETECTION_BLOCKED' : 'DEPENDENCIES_UNAVAILABLE',
+        message: isBotBlocked
+          ? 'YouTube is temporarily blocking datacenter requests from this server IP. Configure YOUTUBE_COOKIES in Render to authenticate.'
+          : 'Required media dependencies are not operational.',
         ytdlpVersion: cachedYtdlpVersion,
         ytdlpPath: cachedYtdlpPath,
         ffmpegVersion: cachedFfmpegVersion,

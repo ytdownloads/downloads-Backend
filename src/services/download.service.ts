@@ -7,7 +7,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { validateYouTubeUrl } from './urlValidation.service.js';
 import { jobRegistry, DownloadJob } from './jobRegistry.service.js';
 import { sanitizeCleanFilename } from '../utils/filename.js';
-import { metadataCache, getCookieArgs } from './ytdlp.service.js';
+import { metadataCache, getCookieArgs, recordBotBlock } from './ytdlp.service.js';
 
 const VALID_VIDEO_FORMAT_REGEX = /^video-(\d{3,4})p$/;
 
@@ -381,6 +381,7 @@ export class DownloadService {
       lowerStderr.includes('bot detection') ||
       lowerStderr.includes('automated queries')
     ) {
+      recordBotBlock();
       logger.warn('Download blocked by YouTube bot detection. Note for deployment owner: YOUTUBE_COOKIES can be configured on Render.', {
         jobId: job.jobId,
       });
