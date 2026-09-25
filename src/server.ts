@@ -7,15 +7,16 @@ import { CleanupService } from './services/cleanup.service.js';
 import { jobRegistry } from './services/jobRegistry.service.js';
 import { batchJobRegistry } from './services/batchJobRegistry.service.js';
 
-// Prepend project-local bin and node_modules/.bin directories to PATH
+// Prepend project-local bin, node_modules/.bin, and node runtime directories to PATH
 const projectBin = path.resolve(process.cwd(), 'bin');
 const nodeModulesBin = path.resolve(process.cwd(), 'node_modules', '.bin');
+const nodeBin = path.dirname(process.execPath);
 const currentPath = process.env.PATH || process.env.Path || '';
 const pathDelimiter = path.delimiter;
 const pathParts = currentPath.split(pathDelimiter);
 
 if (!pathParts.includes(projectBin)) {
-  process.env.PATH = `${projectBin}${pathDelimiter}${nodeModulesBin}${pathDelimiter}${currentPath}`;
+  process.env.PATH = `${projectBin}${pathDelimiter}${nodeModulesBin}${pathDelimiter}${nodeBin}${pathDelimiter}${currentPath}`;
   process.env.Path = process.env.PATH;
 }
 

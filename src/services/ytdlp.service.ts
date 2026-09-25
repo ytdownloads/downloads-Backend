@@ -36,8 +36,8 @@ export function getCookieArgs(): string[] {
 }
 
 export function formatDuration(seconds?: number): string {
-  if (seconds === undefined || seconds === null || isNaN(seconds) || seconds < 0) {
-    return '0:00';
+  if (seconds === undefined || seconds === null || isNaN(seconds) || seconds <= 0) {
+    return '--:--';
   }
   const total = Math.floor(seconds);
   const hrs = Math.floor(total / 3600);
@@ -458,24 +458,22 @@ export class YtDlpService {
           String(env.MAX_PLAYLIST_ITEMS + 1),
           '--no-warnings',
           '--skip-download',
-          '--ignore-no-formats-error',
           '--js-runtimes',
-          'node',
+          `node:${process.execPath}`,
           ...getCookieArgs(),
           validated.normalizedUrl,
         ];
       } else {
-        // Use web_embedded,mweb player client for maximum reliability and avoiding datacenter bot detection
+        // Use default,web_embedded,mweb combined player clients with explicit Node.js runtime
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
           '--extractor-args',
-          'youtube:player_client=web_embedded,mweb',
+          'youtube:player_client=default,web_embedded,mweb',
           '--skip-download',
-          '--ignore-no-formats-error',
           '--js-runtimes',
-          'node',
+          `node:${process.execPath}`,
           ...getCookieArgs(),
           validated.normalizedUrl,
         ];
@@ -485,20 +483,19 @@ export class YtDlpService {
       try {
         rawJson = await this.executeYtDlp(args);
       } catch (err) {
-        // Fallback retry with mweb client (also safe on cloud IPs)
+        // Fallback retry with mweb,web_embedded client
         if (validated.type === 'video') {
-          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with mweb client args...`);
+          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with mweb fallback...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--extractor-args',
-              'youtube:player_client=mweb',
+              'youtube:player_client=mweb,web_embedded',
               '--skip-download',
-              '--ignore-no-formats-error',
               '--js-runtimes',
-              'node',
+              `node:${process.execPath}`,
               ...getCookieArgs(),
               validated.normalizedUrl,
             ];
@@ -528,31 +525,36 @@ export class YtDlpService {
         // Single video
         result = this.normalizeSingleVideo(parsed, validated);
         if (result.type === 'video' && result.formats.length === 0) {
-          logger.info(`0 formats extracted for ${validated.id}, retrying with mweb client...`);
+          logger.info(`0 formats extracted for ${validated.id}, retrying with mweb client fallback...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--extractor-args',
-              'youtube:player_client=mweb',
+              'youtube:player_client=mweb,web_embedded',
               '--skip-download',
               '--js-runtimes',
-              'node',
+              `node:${process.execPath}`,
               ...getCookieArgs(),
               validated.normalizedUrl,
             ];
             const fallbackJson = await this.executeYtDlp(fallbackArgs);
             const fallbackParsed = JSON.parse(fallbackJson);
-            result = this.normalizeSingleVideo(fallbackParsed, validated);
-          } catch {
-            // Keep original result if fallback fails
+            const fallbackResult = this.normalizeSingleVideo(fallbackParsed, validated);
+            if (fallbackResult.formats.length > 0) {
+              result = fallbackResult;
+            }
+          } catch (fallbackErr) {
+            logger.warn('Fallback metadata extraction failed', { error: String(fallbackErr) });
           }
         }
       }
 
-      metadataCache.set(cacheKey, result);
-      metadataCache.set(`${validated.type}:${validated.id}`, result);
+      if (result.type !== 'video' || result.formats.length > 0) {
+        metadataCache.set(cacheKey, result);
+        metadataCache.set(`${validated.type}:${validated.id}`, result);
+      }
       return result;
     } finally {
       const duration = Date.now() - startTime;
