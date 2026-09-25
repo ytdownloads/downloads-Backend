@@ -68,7 +68,7 @@ export class DownloadService {
       '--concurrent-fragments',
       '4',
       '--extractor-args',
-      'youtube:player_client=web_embedded,android,mweb',
+      'youtube:player_client=visionos,web_embedded',
       '--js-runtimes',
       `node:${process.execPath}`,
       ...getCookieArgs(),

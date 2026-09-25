@@ -464,13 +464,13 @@ export class YtDlpService {
           validated.normalizedUrl,
         ];
       } else {
-        // Use web_embedded,android,mweb player clients to avoid datacenter bot detection while ensuring format coverage
+        // Use visionos,web_embedded player clients to completely avoid datacenter bot detection while ensuring full format extraction
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
           '--extractor-args',
-          'youtube:player_client=web_embedded,android,mweb',
+          'youtube:player_client=visionos,web_embedded',
           '--skip-download',
           '--js-runtimes',
           `node:${process.execPath}`,
@@ -483,16 +483,16 @@ export class YtDlpService {
       try {
         rawJson = await this.executeYtDlp(args);
       } catch (err) {
-        // Fallback retry with android,mweb,web_embedded client
+        // Fallback retry with visionos,web_embedded,android client
         if (validated.type === 'video') {
-          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with android fallback...`);
+          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with visionos fallback...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--extractor-args',
-              'youtube:player_client=android,mweb,web_embedded',
+              'youtube:player_client=visionos,web_embedded,android',
               '--skip-download',
               '--js-runtimes',
               `node:${process.execPath}`,
@@ -525,14 +525,14 @@ export class YtDlpService {
         // Single video
         result = this.normalizeSingleVideo(parsed, validated);
         if (result.type === 'video' && result.formats.length === 0) {
-          logger.info(`0 formats extracted for ${validated.id}, retrying with android fallback...`);
+          logger.info(`0 formats extracted for ${validated.id}, retrying with visionos fallback...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--extractor-args',
-              'youtube:player_client=android,mweb,web_embedded',
+              'youtube:player_client=visionos,web_embedded,android',
               '--skip-download',
               '--js-runtimes',
               `node:${process.execPath}`,
