@@ -464,13 +464,13 @@ export class YtDlpService {
           validated.normalizedUrl,
         ];
       } else {
-        // Use default,web_embedded,mweb combined player clients with explicit Node.js runtime
+        // Use web_embedded,android,mweb player clients to avoid datacenter bot detection while ensuring format coverage
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
           '--extractor-args',
-          'youtube:player_client=default,web_embedded,mweb',
+          'youtube:player_client=web_embedded,android,mweb',
           '--skip-download',
           '--js-runtimes',
           `node:${process.execPath}`,
@@ -483,16 +483,16 @@ export class YtDlpService {
       try {
         rawJson = await this.executeYtDlp(args);
       } catch (err) {
-        // Fallback retry with mweb,web_embedded client
+        // Fallback retry with android,mweb,web_embedded client
         if (validated.type === 'video') {
-          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with mweb fallback...`);
+          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with android fallback...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--extractor-args',
-              'youtube:player_client=mweb,web_embedded',
+              'youtube:player_client=android,mweb,web_embedded',
               '--skip-download',
               '--js-runtimes',
               `node:${process.execPath}`,
@@ -525,14 +525,14 @@ export class YtDlpService {
         // Single video
         result = this.normalizeSingleVideo(parsed, validated);
         if (result.type === 'video' && result.formats.length === 0) {
-          logger.info(`0 formats extracted for ${validated.id}, retrying with mweb client fallback...`);
+          logger.info(`0 formats extracted for ${validated.id}, retrying with android fallback...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--extractor-args',
-              'youtube:player_client=mweb,web_embedded',
+              'youtube:player_client=android,mweb,web_embedded',
               '--skip-download',
               '--js-runtimes',
               `node:${process.execPath}`,
