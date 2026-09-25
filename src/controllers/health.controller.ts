@@ -30,9 +30,21 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
   }, 200);
 }
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 export async function postDiagnose(req: Request, res: Response): Promise<void> {
   const client = (req.body?.client as string) || '';
   const url = (req.body?.url as string) || 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+  const customCookies = (req.body?.cookies as string) || '';
+
+  let cookieArgs = getCookieArgs();
+  if (customCookies) {
+    const customPath = path.join(os.tmpdir(), 'custom_cookies.txt');
+    fs.writeFileSync(customPath, customCookies, 'utf-8');
+    cookieArgs = ['--cookies', customPath];
+  }
   
   const args = [
     '--dump-single-json',
@@ -41,7 +53,7 @@ export async function postDiagnose(req: Request, res: Response): Promise<void> {
     '--skip-download',
     '--js-runtimes',
     `node:${process.execPath}`,
-    ...getCookieArgs(),
+    ...cookieArgs,
   ];
   if (client) {
     args.push('--extractor-args', `youtube:player_client=${client}`);
@@ -79,6 +91,9 @@ export async function postDiagnose(req: Request, res: Response): Promise<void> {
         code,
         title,
         formatsCount,
+        args,
+        cookieArgs,
+        cwd: process.cwd(),
         stdoutLength: stdout.length,
         stderr: stderr.slice(0, 500),
       }, 200);
