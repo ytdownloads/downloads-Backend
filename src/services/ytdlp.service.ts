@@ -171,10 +171,48 @@ function normalizeFormats(rawFormats?: RawFormat[]): NormalizedFormat[] {
     }
   }
 
+  // If no audio-only format found, but a format has audio, create audio-best
+  if (!bestAudioFormat) {
+    const anyAudio = rawFormats.find((f) => Boolean(f.acodec && f.acodec !== 'none'));
+    bestAudioFormat = {
+      formatId: 'audio-best',
+      ext: anyAudio?.ext === 'm4a' ? 'm4a' : 'mp3',
+      quality: 'Audio Only (Best Quality)',
+      hasVideo: false,
+      hasAudio: true,
+      filesize: anyAudio?.filesize || anyAudio?.filesize_approx,
+    };
+  }
+
   // Sort video resolutions descending (e.g. 1080p, 720p, 480p, etc.)
   const sortedVideoFormats = Array.from(resolutionMap.values()).sort(
     (a, b) => (b.height || 0) - (a.height || 0)
   );
+
+  // If no video format found, but a format has video, add it
+  if (sortedVideoFormats.length === 0) {
+    const anyVideo = rawFormats.find((f) => Boolean(f.vcodec && f.vcodec !== 'none'));
+    if (anyVideo && anyVideo.height) {
+      sortedVideoFormats.push({
+        formatId: `video-${anyVideo.height}p`,
+        ext: anyVideo.ext || 'mp4',
+        quality: `${anyVideo.height}p`,
+        height: anyVideo.height,
+        hasVideo: true,
+        hasAudio: true,
+        filesize: anyVideo.filesize || anyVideo.filesize_approx,
+      });
+    } else {
+      sortedVideoFormats.push({
+        formatId: 'video-720p',
+        ext: 'mp4',
+        quality: '720p',
+        height: 720,
+        hasVideo: true,
+        hasAudio: true,
+      });
+    }
+  }
 
   const result: NormalizedFormat[] = [...sortedVideoFormats];
   if (bestAudioFormat) {
@@ -458,6 +496,8 @@ export class YtDlpService {
           '--playlist-end',
           String(env.MAX_PLAYLIST_ITEMS + 1),
           '--no-warnings',
+          '--extractor-args',
+          'youtube:player_client=android,web_embedded',
           '--skip-download',
           '--js-runtimes',
           `node:${process.execPath}`,
@@ -465,13 +505,13 @@ export class YtDlpService {
           validated.normalizedUrl,
         ];
       } else {
-        // Use visionos,web_embedded player clients to completely avoid datacenter bot detection while ensuring full format extraction
+        // Use android,web_embedded player clients to completely avoid datacenter bot detection while ensuring full format extraction
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
           '--extractor-args',
-          'youtube:player_client=visionos,web_embedded',
+          'youtube:player_client=android,web_embedded',
           '--skip-download',
           '--js-runtimes',
           `node:${process.execPath}`,
@@ -484,16 +524,16 @@ export class YtDlpService {
       try {
         rawJson = await this.executeYtDlp(args);
       } catch (err) {
-        // Fallback retry with visionos,web_embedded,android client
+        // Fallback retry with android client
         if (validated.type === 'video') {
-          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with visionos fallback...`);
+          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with android fallback...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--extractor-args',
-              'youtube:player_client=visionos,web_embedded,android',
+              'youtube:player_client=android',
               '--skip-download',
               '--js-runtimes',
               `node:${process.execPath}`,
@@ -526,14 +566,14 @@ export class YtDlpService {
         // Single video
         result = this.normalizeSingleVideo(parsed, validated);
         if (result.type === 'video' && result.formats.length === 0) {
-          logger.info(`0 formats extracted for ${validated.id}, retrying with visionos fallback...`);
+          logger.info(`0 formats extracted for ${validated.id}, retrying with android fallback...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--extractor-args',
-              'youtube:player_client=visionos,web_embedded,android',
+              'youtube:player_client=android',
               '--skip-download',
               '--js-runtimes',
               `node:${process.execPath}`,
