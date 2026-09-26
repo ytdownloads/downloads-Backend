@@ -131,10 +131,15 @@ export async function getProbeCheck(req: Request, res: Response): Promise<void> 
     try {
       const stats = fs.statSync(cookieStatus.activePath);
       const content = fs.readFileSync(cookieStatus.activePath, 'utf-8');
-      const lines = content.split('\n').filter((l) => l.trim().length > 0 && !l.startsWith('#')).length;
+      const nonCommentLines = content.split('\n').filter((l) => l.trim().length > 0 && !l.startsWith('#'));
       cookieMeta.sizeBytes = stats.size;
-      cookieMeta.nonCommentLines = lines;
+      cookieMeta.nonCommentLines = nonCommentLines.length;
       cookieMeta.hasYoutubeCookies = content.includes('.youtube.com');
+      cookieMeta.hasGoogleCookies = content.includes('.google.com');
+      cookieMeta.hasLoginInfo = content.includes('LOGIN_INFO');
+      cookieMeta.hasSapisid = content.includes('SAPISID');
+      cookieMeta.hasSid = content.includes('SID');
+      cookieMeta.cookieKeys = Array.from(new Set(nonCommentLines.map((l) => l.split('\t')[5]).filter(Boolean)));
     } catch (e: any) {
       cookieMeta.error = e.message;
     }
