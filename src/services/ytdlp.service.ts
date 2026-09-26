@@ -170,16 +170,12 @@ export function getUserAgentArgs(): string[] {
 }
 
 /**
- * Returns appropriate extractor player client arguments depending on cookie presence
+ * Returns appropriate extractor player client arguments depending on environment.
+ * The android,ios mobile API clients are the fastest and most reliable on cloud/datacenter IPs,
+ * avoiding Web Proof-of-Origin bot detection challenges entirely.
  */
 export function getPlayerClientArgs(): string[] {
-  const status = inspectCookieStatus();
-  if (status.activePath) {
-    // When browser session cookies are loaded, use mweb (supports cookies) with android fallback
-    return ['--extractor-args', 'youtube:player_client=mweb,android'];
-  }
-  // When no cookies are loaded, use android with mweb fallback
-  return ['--extractor-args', 'youtube:player_client=android,mweb'];
+  return ['--extractor-args', 'youtube:player_client=android,ios'];
 }
 
 export function formatDuration(seconds?: number): string {
@@ -548,10 +544,7 @@ export class YtDlpService {
           lowerStderr.includes('sign in to confirm you\'re not a bot') ||
           lowerStderr.includes('automated queries')
         ) {
-          recordBotBlock();
-          logger.warn('YouTube challenged server IP with bot detection. Note for deployment owner: YOUTUBE_COOKIES can be set in Render environment variables to authenticate cloud requests.', {
-            code,
-          });
+          logger.warn('YouTube challenged server IP with bot detection.', { code });
           return reject(
             new AppError(
               'BOT_DETECTION_BLOCKED',
@@ -648,149 +641,127 @@ export class YtDlpService {
     });
 
     try {
-      let args: string[];
+      const cookieStatus = inspectCookieStatus();
 
-      if (validated.type === 'playlist') {
-        // Safe playlist extraction with flat-playlist and limit protection
-        args = [
-          '--dump-single-json',
-          '--flat-playlist',
-          '--playlist-end',
-          String(env.MAX_PLAYLIST_ITEMS + 1),
-          '--no-warnings',
-          '--socket-timeout',
-          '15',
-          '--retries',
-          '3',
-          ...getPlayerClientArgs(),
-          '--skip-download',
-          '--js-runtimes',
-          `node:${process.execPath}`,
-          ...getUserAgentArgs(),
-          ...getCookieArgs(),
-          validated.normalizedUrl,
-        ];
-      } else {
-        // Dynamic player client args depending on cookie presence
-        args = [
-          '--dump-single-json',
-          '--no-playlist',
-          '--no-warnings',
-          '--socket-timeout',
-          '15',
-          '--retries',
-          '3',
-          ...getPlayerClientArgs(),
-          '--skip-download',
-          '--js-runtimes',
-          `node:${process.execPath}`,
-          ...getUserAgentArgs(),
-          ...getCookieArgs(),
-          validated.normalizedUrl,
-        ];
+      // Ordered extraction strategies:
+      // 1. Android/iOS mobile API (Fastest on datacenter IPs, immune to Web Proof-of-Origin bot detection, extracts full resolutions)
+      // 2. Authenticated web/mweb with Render secret cookies (if cookies configured, for age-restricted/authenticated content)
+      // 3. TV embedded client fallback (alternative mobile/smart TV endpoint)
+      const strategies: Array<{ name: string; args: string[] }> = [
+        {
+          name: 'android_ios_direct',
+          args: [
+            '--dump-single-json',
+            ...(validated.type === 'playlist'
+              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+              : ['--no-playlist']),
+            '--no-warnings',
+            '--socket-timeout',
+            '15',
+            '--retries',
+            '3',
+            ...getPlayerClientArgs(),
+            '--skip-download',
+            '--js-runtimes',
+            `node:${process.execPath}`,
+            ...getUserAgentArgs(),
+            validated.normalizedUrl,
+          ],
+        },
+      ];
+
+      if (cookieStatus.activePath) {
+        strategies.push({
+          name: 'mweb_authenticated',
+          args: [
+            '--dump-single-json',
+            ...(validated.type === 'playlist'
+              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+              : ['--no-playlist']),
+            '--no-warnings',
+            '--socket-timeout',
+            '15',
+            '--retries',
+            '3',
+            '--extractor-args',
+            'youtube:player_client=mweb,web',
+            '--skip-download',
+            '--js-runtimes',
+            `node:${process.execPath}`,
+            ...getUserAgentArgs(),
+            ...getCookieArgs(),
+            validated.normalizedUrl,
+          ],
+        });
       }
 
-      let rawJson: string;
-      try {
-        rawJson = await this.executeYtDlp(args);
-      } catch (err) {
-        // If primary timed out, do not launch a second long-running process that would breach the gateway timeout
-        if (err instanceof AppError && err.statusCode === 504) {
-          throw err;
-        }
+      strategies.push({
+        name: 'tv_embedded_fallback',
+        args: [
+          '--dump-single-json',
+          ...(validated.type === 'playlist'
+            ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+            : ['--no-playlist']),
+          '--no-warnings',
+          '--socket-timeout',
+          '15',
+          '--retries',
+          '3',
+          '--extractor-args',
+          'youtube:player_client=tv_embedded,web_embedded',
+          '--skip-download',
+          '--js-runtimes',
+          `node:${process.execPath}`,
+          ...getUserAgentArgs(),
+          validated.normalizedUrl,
+        ],
+      });
 
-        // Fallback retry with alternative client
-        if (validated.type === 'video') {
-          const cookieStatus = inspectCookieStatus();
-          const fallbackClient = cookieStatus.activePath
-            ? 'youtube:player_client=android'
-            : 'youtube:player_client=mweb';
-          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with fallback client (${fallbackClient})...`);
-          try {
-            const fallbackArgs = [
-              '--dump-single-json',
-              '--no-playlist',
-              '--no-warnings',
-              '--socket-timeout',
-              '15',
-              '--retries',
-              '3',
-              '--extractor-args',
-              fallbackClient,
-              '--skip-download',
-              '--js-runtimes',
-              `node:${process.execPath}`,
-              ...getUserAgentArgs(),
-              ...getCookieArgs(),
-              validated.normalizedUrl,
-            ];
-            rawJson = await this.executeYtDlp(fallbackArgs);
-          } catch {
+      let lastError: any = null;
+      let hadBotBlock = false;
+
+      for (const strategy of strategies) {
+        try {
+          logger.debug(`Attempting metadata extraction with strategy: ${strategy.name}`);
+          const rawJson = await this.executeYtDlp(strategy.args);
+          const parsed: RawYtDlpOutput = JSON.parse(rawJson);
+
+          let result: MediaInfoResult;
+          if (parsed._type === 'playlist' || validated.type === 'playlist') {
+            result = this.normalizePlaylist(parsed, validated);
+          } else {
+            result = this.normalizeSingleVideo(parsed, validated);
+            // If video yielded 0 formats, try the next strategy
+            if (result.type === 'video' && result.formats.length === 0) {
+              logger.warn(`Strategy ${strategy.name} extracted 0 formats for ${validated.id}, trying next strategy...`);
+              continue;
+            }
+          }
+
+          clearBotBlock();
+          metadataCache.set(cacheKey, result);
+          metadataCache.set(`${validated.type}:${validated.id}`, result);
+          return result;
+        } catch (err: any) {
+          lastError = err;
+          if (err instanceof AppError && err.code === 'BOT_DETECTION_BLOCKED') {
+            hadBotBlock = true;
+          }
+          // Do not attempt further long-running strategies if request timed out
+          if (err instanceof AppError && err.statusCode === 504) {
             throw err;
           }
-        } else {
-          throw err;
+          logger.warn(`Strategy ${strategy.name} failed for ${validated.id}`, {
+            error: err.message,
+            code: err instanceof AppError ? err.code : 'UNKNOWN',
+          });
         }
       }
 
-      let parsed: RawYtDlpOutput;
-
-      try {
-        parsed = JSON.parse(rawJson);
-      } catch (err) {
-        logger.error('Failed to parse yt-dlp JSON output', { error: String(err) });
-        throw new AppError('METADATA_FAILED', 'Could not parse media metadata.', 500);
+      if (hadBotBlock) {
+        recordBotBlock();
       }
-
-      let result: MediaInfoResult;
-      // Check if yt-dlp returned a playlist
-      if (parsed._type === 'playlist' || validated.type === 'playlist') {
-        result = this.normalizePlaylist(parsed, validated);
-      } else {
-        // Single video
-        result = this.normalizeSingleVideo(parsed, validated);
-        if (result.type === 'video' && result.formats.length === 0) {
-          const cookieStatus = inspectCookieStatus();
-          const fallbackClient = cookieStatus.activePath
-            ? 'youtube:player_client=android'
-            : 'youtube:player_client=mweb';
-          logger.info(`0 formats extracted for ${validated.id}, retrying with fallback client (${fallbackClient})...`);
-          try {
-            const fallbackArgs = [
-              '--dump-single-json',
-              '--no-playlist',
-              '--no-warnings',
-              '--socket-timeout',
-              '15',
-              '--retries',
-              '3',
-              '--extractor-args',
-              fallbackClient,
-              '--skip-download',
-              '--js-runtimes',
-              `node:${process.execPath}`,
-              ...getUserAgentArgs(),
-              ...getCookieArgs(),
-              validated.normalizedUrl,
-            ];
-            const fallbackJson = await this.executeYtDlp(fallbackArgs);
-            const fallbackParsed = JSON.parse(fallbackJson);
-            const fallbackResult = this.normalizeSingleVideo(fallbackParsed, validated);
-            if (fallbackResult.formats.length > 0) {
-              result = fallbackResult;
-            }
-          } catch (fallbackErr) {
-            logger.warn('Fallback metadata extraction failed', { error: String(fallbackErr) });
-          }
-        }
-      }
-
-      if (result.type !== 'video' || result.formats.length > 0) {
-        clearBotBlock();
-        metadataCache.set(cacheKey, result);
-        metadataCache.set(`${validated.type}:${validated.id}`, result);
-      }
-      return result;
+      throw lastError || new AppError('METADATA_FAILED', 'Failed to extract media metadata.', 500);
     } finally {
       const duration = Date.now() - startTime;
       logger.info(`Finished metadata extraction for id: ${validated.id} in ${duration}ms`);

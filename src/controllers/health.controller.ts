@@ -105,9 +105,7 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
       available: ytdlpHealthy,
       jsRuntime: 'node',
       ejsAvailable: true,
-      extractorConfiguration: cookieStatus.activePath
-        ? 'youtube:player_client=mweb,android'
-        : 'youtube:player_client=android,mweb',
+      extractorConfiguration: 'youtube:player_client=android,ios',
     },
     ffmpeg: {
       version: cachedFfmpegVersion,
