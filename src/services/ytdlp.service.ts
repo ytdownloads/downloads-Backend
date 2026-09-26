@@ -590,7 +590,7 @@ export class YtDlpService {
             'METADATA_FAILED',
             'Failed to extract metadata for this YouTube link. Please check the URL and try again.',
             400,
-            { stderrSample: lowerStderr.slice(0, 500) }
+            { stderrSample: lowerStderr.slice(-1500) }
           )
         );
       });
