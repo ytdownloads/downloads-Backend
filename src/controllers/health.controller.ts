@@ -175,7 +175,27 @@ export async function getProbeCheck(req: Request, res: Response): Promise<void> 
     }
   };
 
+  const customClient = req.query.client as string;
+  if (customClient) {
+    const withCookies = req.query.cookies === 'true';
+    const clientArgs = ['--extractor-args', `youtube:player_client=${customClient}`];
+    if (withCookies && cookieStatus.activePath) {
+      clientArgs.push('--cookies', cookieStatus.activePath);
+    }
+    const resCustom = await testClient(clientArgs);
+    res.json({
+      videoId,
+      client: customClient,
+      withCookies,
+      result: resCustom,
+    });
+    return;
+  }
+
   const results: Record<string, any> = {};
+  results['tv'] = await testClient(['--extractor-args', 'youtube:player_client=tv']);
+  results['android_creator'] = await testClient(['--extractor-args', 'youtube:player_client=android_creator']);
+  results['web_creator'] = await testClient(['--extractor-args', 'youtube:player_client=web_creator']);
   results['android_direct'] = await testClient(['--extractor-args', 'youtube:player_client=android']);
   results['ios_direct'] = await testClient(['--extractor-args', 'youtube:player_client=ios']);
   results['tv_embedded'] = await testClient(['--extractor-args', 'youtube:player_client=tv_embedded']);
