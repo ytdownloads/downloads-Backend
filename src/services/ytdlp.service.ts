@@ -250,6 +250,8 @@ interface RawYtDlpOutput {
   view_count?: number;
   upload_date?: string;
   playlist_count?: number;
+  is_live?: boolean;
+  live_status?: string;
   entries?: RawEntry[];
   formats?: RawFormat[];
 }
@@ -280,7 +282,19 @@ function normalizeFormats(rawFormats?: RawFormat[]): NormalizedFormat[] {
   for (const f of rawFormats) {
     const hasVideo = Boolean(f.vcodec && f.vcodec !== 'none');
     const hasAudio = Boolean(f.acodec && f.acodec !== 'none');
-    const height = f.height;
+    let height = f.height;
+    if (!height && f.resolution) {
+      const match = f.resolution.match(/(\d+)x(\d+)/);
+      if (match) {
+        height = parseInt(match[2], 10);
+      }
+    }
+    if (!height && f.format_note) {
+      const match = f.format_note.match(/(\d+)p/);
+      if (match) {
+        height = parseInt(match[1], 10);
+      }
+    }
     const filesize = f.filesize || f.filesize_approx;
 
     // Track audio-only option
@@ -302,8 +316,14 @@ function normalizeFormats(rawFormats?: RawFormat[]): NormalizedFormat[] {
       const qualityLabel = `${height}p${f.fps && f.fps > 30 ? f.fps : ''}`;
       const existing = resolutionMap.get(height);
 
-      // Prefer MP4 container or format with known filesize
-      if (!existing || (f.ext === 'mp4' && existing.ext !== 'mp4')) {
+      // Prefer MP4 container or higher FPS or format with known filesize
+      const isBetter =
+        !existing ||
+        (f.fps && (!existing.fps || f.fps > existing.fps)) ||
+        (f.ext === 'mp4' && existing.ext !== 'mp4') ||
+        (filesize && !existing.filesize);
+
+      if (isBetter) {
         resolutionMap.set(height, {
           formatId: `video-${height}p`,
           ext: f.ext || 'mp4',
@@ -312,7 +332,7 @@ function normalizeFormats(rawFormats?: RawFormat[]): NormalizedFormat[] {
           fps: f.fps,
           hasVideo: true,
           hasAudio: true, // Will be merged with best audio during download
-          filesize,
+          filesize: filesize || existing?.filesize,
         });
       }
     }
@@ -321,22 +341,24 @@ function normalizeFormats(rawFormats?: RawFormat[]): NormalizedFormat[] {
   // If no audio-only format found, but a format has audio, create audio-best
   if (!bestAudioFormat) {
     const anyAudio = rawFormats.find((f) => Boolean(f.acodec && f.acodec !== 'none'));
-    bestAudioFormat = {
-      formatId: 'audio-best',
-      ext: anyAudio?.ext === 'm4a' ? 'm4a' : 'mp3',
-      quality: 'Audio Only (Best Quality)',
-      hasVideo: false,
-      hasAudio: true,
-      filesize: anyAudio?.filesize || anyAudio?.filesize_approx,
-    };
+    if (anyAudio) {
+      bestAudioFormat = {
+        formatId: 'audio-best',
+        ext: anyAudio.ext === 'm4a' ? 'm4a' : 'mp3',
+        quality: 'Audio Only (Best Quality)',
+        hasVideo: false,
+        hasAudio: true,
+        filesize: anyAudio.filesize || anyAudio.filesize_approx,
+      };
+    }
   }
 
-  // Sort video resolutions descending (e.g. 1080p, 720p, 480p, etc.)
+  // Sort video resolutions descending (e.g. 2160p, 1440p, 1080p, 720p, etc.)
   const sortedVideoFormats = Array.from(resolutionMap.values()).sort(
     (a, b) => (b.height || 0) - (a.height || 0)
   );
 
-  // If no video format found, but a format has video, add it
+  // If no video format found, but a format has video, add it without inventing fake heights
   if (sortedVideoFormats.length === 0) {
     const anyVideo = rawFormats.find((f) => Boolean(f.vcodec && f.vcodec !== 'none'));
     if (anyVideo && anyVideo.height) {
@@ -348,15 +370,6 @@ function normalizeFormats(rawFormats?: RawFormat[]): NormalizedFormat[] {
         hasVideo: true,
         hasAudio: true,
         filesize: anyVideo.filesize || anyVideo.filesize_approx,
-      });
-    } else {
-      sortedVideoFormats.push({
-        formatId: 'video-720p',
-        ext: 'mp4',
-        quality: '720p',
-        height: 720,
-        hasVideo: true,
-        hasAudio: true,
       });
     }
   }
@@ -788,6 +801,7 @@ export class YtDlpService {
     data: RawYtDlpOutput,
     validated: ValidatedYouTubeUrl
   ): SingleVideoMetadata {
+    const isLive = Boolean(data.is_live || data.live_status === 'is_live');
     const duration = data.duration || 0;
 
     return {
@@ -798,10 +812,12 @@ export class YtDlpService {
       channel: data.channel || data.uploader || 'Unknown Channel',
       channelId: data.channel_id || data.uploader_id,
       duration,
-      durationText: formatDuration(duration),
+      durationText: isLive && duration === 0 ? 'LIVE' : formatDuration(duration),
       webpageUrl: data.webpage_url || validated.normalizedUrl,
       viewCount: data.view_count,
       uploadDate: data.upload_date,
+      isLive,
+      liveStatus: data.live_status,
       formats: normalizeFormats(data.formats),
     };
   }

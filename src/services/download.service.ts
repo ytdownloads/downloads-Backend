@@ -42,7 +42,16 @@ export class DownloadService {
     }
 
     // Check if canonical URL is cached from metadata extraction
-    const cachedMeta = metadataCache.get(`video:${validated.id}`);
+    const cachedMeta = metadataCache.get(`video:${validated.id}`) as any;
+    if (cachedMeta && cachedMeta.type === 'video' && cachedMeta.liveStatus === 'is_upcoming') {
+      throw new AppError(
+        'LIVE_STREAM_UPCOMING',
+        'This live broadcast has not started yet. Please check back when the stream goes live.',
+        400
+      );
+    }
+
+    const isLive = Boolean(cachedMeta && cachedMeta.type === 'video' && cachedMeta.isLive);
     const downloadUrl =
       cachedMeta && cachedMeta.type === 'video' && cachedMeta.webpageUrl
         ? cachedMeta.webpageUrl
@@ -94,9 +103,12 @@ export class DownloadService {
         '--audio-format',
         'mp3',
         '--audio-quality',
-        '0',
-        validated.normalizedUrl
+        '0'
       );
+      if (isLive) {
+        args.push('--downloader', 'ffmpeg', '--downloader-args', 'ffmpeg_i:-t 60');
+      }
+      args.push(downloadUrl);
     } else {
       const match = formatId.match(VALID_VIDEO_FORMAT_REGEX);
       const height = match ? parseInt(match[1], 10) : 1080;
@@ -104,9 +116,12 @@ export class DownloadService {
         '-f',
         `bestvideo[height<=${height}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`,
         '--merge-output-format',
-        'mp4',
-        validated.normalizedUrl
+        'mp4'
       );
+      if (isLive) {
+        args.push('--downloader', 'ffmpeg', '--downloader-args', 'ffmpeg_i:-t 60');
+      }
+      args.push(downloadUrl);
     }
 
     // 6. Launch download process in background

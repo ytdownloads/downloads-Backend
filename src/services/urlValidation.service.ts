@@ -173,6 +173,21 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
     };
   }
 
+  // Live video URLs (e.g. https://www.youtube.com/live/VIDEO_ID)
+  if (parsed.pathname.toLowerCase().startsWith('/live/')) {
+    const rawVideoId = parsed.pathname.slice('/live/'.length).split('/')[0];
+    const videoId = cleanVideoId(rawVideoId);
+    if (!videoId || !VIDEO_ID_REGEX.test(videoId)) {
+      throw new AppError('INVALID_URL', 'Invalid YouTube live video ID.', 400);
+    }
+
+    return {
+      type: 'video',
+      id: videoId,
+      normalizedUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`,
+    };
+  }
+
   // Embed video URLs (e.g. https://www.youtube.com/embed/VIDEO_ID or /v/VIDEO_ID)
   if (parsed.pathname.toLowerCase().startsWith('/embed/') || parsed.pathname.toLowerCase().startsWith('/v/')) {
     const prefix = parsed.pathname.toLowerCase().startsWith('/embed/') ? '/embed/' : '/v/';
