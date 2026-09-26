@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { sendSuccess } from '../utils/response.js';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
+import fs from 'node:fs';
 import { inspectCookieStatus, isBotBlockRecent } from '../services/ytdlp.service.js';
 
 const execAsync = promisify(exec);
@@ -113,3 +114,90 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
     },
   }, 200);
 }
+
+export async function getProbeCheck(req: Request, res: Response): Promise<void> {
+  const videoId = (req.query.id as string) || 'jNQXAC9IVRw';
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
+  const cookieStatus = inspectCookieStatus();
+
+  const cookieMeta: any = {
+    detected: cookieStatus.detected,
+    readable: cookieStatus.readable,
+    validFormat: cookieStatus.validFormat,
+    source: cookieStatus.source,
+  };
+
+  if (cookieStatus.activePath) {
+    try {
+      const stats = fs.statSync(cookieStatus.activePath);
+      const content = fs.readFileSync(cookieStatus.activePath, 'utf-8');
+      const lines = content.split('\n').filter((l) => l.trim().length > 0 && !l.startsWith('#')).length;
+      cookieMeta.sizeBytes = stats.size;
+      cookieMeta.nonCommentLines = lines;
+      cookieMeta.hasYoutubeCookies = content.includes('.youtube.com');
+    } catch (e: any) {
+      cookieMeta.error = e.message;
+    }
+  }
+
+  const testClient = async (args: string[]) => {
+    const t0 = Date.now();
+    try {
+      const fullArgs = [
+        '--dump-single-json',
+        '--no-playlist',
+        '--no-warnings',
+        '--socket-timeout',
+        '10',
+        '--retries',
+        '1',
+        '--skip-download',
+        '--js-runtimes',
+        `node:${process.execPath}`,
+        ...args,
+        url,
+      ];
+      const cmd = `yt-dlp ${fullArgs.map((a) => `"${a}"`).join(' ')}`;
+      const { stdout } = await execAsync(cmd, { timeout: 20000 });
+      let title = 'parsed';
+      try {
+        const p = JSON.parse(stdout);
+        title = p.title;
+      } catch {}
+      return { success: true, timeMs: Date.now() - t0, title };
+    } catch (e: any) {
+      return {
+        success: false,
+        timeMs: Date.now() - t0,
+        code: e.code,
+        stderr: (e.stderr || e.message || '').slice(-400),
+      };
+    }
+  };
+
+  const results: Record<string, any> = {};
+  results['android_direct'] = await testClient(['--extractor-args', 'youtube:player_client=android']);
+  results['ios_direct'] = await testClient(['--extractor-args', 'youtube:player_client=ios']);
+  results['tv_embedded'] = await testClient(['--extractor-args', 'youtube:player_client=tv_embedded']);
+  if (cookieStatus.activePath) {
+    results['web_with_cookies'] = await testClient([
+      '--extractor-args',
+      'youtube:player_client=web',
+      '--cookies',
+      cookieStatus.activePath,
+    ]);
+    results['mweb_with_cookies'] = await testClient([
+      '--extractor-args',
+      'youtube:player_client=mweb',
+      '--cookies',
+      cookieStatus.activePath,
+    ]);
+  }
+
+  res.json({
+    videoId,
+    cookieMeta,
+    results,
+  });
+}
+
