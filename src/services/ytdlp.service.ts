@@ -161,11 +161,11 @@ export function getUserAgentArgs(): string[] {
 export function getPlayerClientArgs(): string[] {
   const status = inspectCookieStatus();
   if (status.activePath) {
-    // When browser session cookies are loaded, use web client that supports cookie authentication
-    return ['--extractor-args', 'youtube:player_client=web,web_embedded,mweb'];
+    // When browser session cookies are loaded, use mweb (supports cookies) with android fallback
+    return ['--extractor-args', 'youtube:player_client=mweb,android'];
   }
-  // When no cookies are loaded, use android,web_embedded
-  return ['--extractor-args', 'youtube:player_client=android,web_embedded'];
+  // When no cookies are loaded, use android with mweb fallback
+  return ['--extractor-args', 'youtube:player_client=android,mweb'];
 }
 
 export function formatDuration(seconds?: number): string {
@@ -501,8 +501,9 @@ export class YtDlpService {
           return reject(
             new AppError(
               'TIMEOUT',
-              'Metadata extraction timed out. The URL may be unreachable or slow to respond.',
-              504
+              `Metadata extraction timed out (${env.INFO_TIMEOUT_MS}ms). The URL may be unreachable or slow to respond.`,
+              504,
+              { stderrSample: stderr.slice(-1500) }
             )
           );
         }
@@ -632,6 +633,8 @@ export class YtDlpService {
           '--no-warnings',
           '--socket-timeout',
           '15',
+          '--retries',
+          '3',
           ...getPlayerClientArgs(),
           '--skip-download',
           '--js-runtimes',
@@ -648,6 +651,8 @@ export class YtDlpService {
           '--no-warnings',
           '--socket-timeout',
           '15',
+          '--retries',
+          '3',
           ...getPlayerClientArgs(),
           '--skip-download',
           '--js-runtimes',
@@ -662,12 +667,17 @@ export class YtDlpService {
       try {
         rawJson = await this.executeYtDlp(args);
       } catch (err) {
+        // If primary timed out, do not launch a second long-running process that would breach the gateway timeout
+        if (err instanceof AppError && err.statusCode === 504) {
+          throw err;
+        }
+
         // Fallback retry with alternative client
         if (validated.type === 'video') {
           const cookieStatus = inspectCookieStatus();
           const fallbackClient = cookieStatus.activePath
-            ? 'youtube:player_client=mweb,web'
-            : 'youtube:player_client=android';
+            ? 'youtube:player_client=android'
+            : 'youtube:player_client=mweb';
           logger.info(`Extraction with primary client failed for ${validated.id}, retrying with fallback client (${fallbackClient})...`);
           try {
             const fallbackArgs = [
@@ -676,6 +686,8 @@ export class YtDlpService {
               '--no-warnings',
               '--socket-timeout',
               '15',
+              '--retries',
+              '3',
               '--extractor-args',
               fallbackClient,
               '--skip-download',
@@ -713,8 +725,8 @@ export class YtDlpService {
         if (result.type === 'video' && result.formats.length === 0) {
           const cookieStatus = inspectCookieStatus();
           const fallbackClient = cookieStatus.activePath
-            ? 'youtube:player_client=mweb,web'
-            : 'youtube:player_client=android';
+            ? 'youtube:player_client=android'
+            : 'youtube:player_client=mweb';
           logger.info(`0 formats extracted for ${validated.id}, retrying with fallback client (${fallbackClient})...`);
           try {
             const fallbackArgs = [
@@ -723,6 +735,8 @@ export class YtDlpService {
               '--no-warnings',
               '--socket-timeout',
               '15',
+              '--retries',
+              '3',
               '--extractor-args',
               fallbackClient,
               '--skip-download',
