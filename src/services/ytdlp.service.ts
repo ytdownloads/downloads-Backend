@@ -72,11 +72,25 @@ export function inspectCookieStatus(): CookieStatus {
         }
       }
 
+      let activePath: string | null = null;
+      if (isReadable && isValidFormat) {
+        try {
+          const writablePath = path.join(os.tmpdir(), 'render-youtube-cookies.txt');
+          // Render mounts /etc/secrets as read-only. yt-dlp dumps updated cookie jar on exit,
+          // which causes OSError [Errno 30] Read-only file system unless pointed to a writable path.
+          fs.copyFileSync(RENDER_SECRET_COOKIE_PATH, writablePath);
+          activePath = writablePath;
+        } catch (copyErr) {
+          logger.warn('Failed copying secret cookies to writable tmp location', { error: String(copyErr) });
+          activePath = RENDER_SECRET_COOKIE_PATH;
+        }
+      }
+
       return {
         detected: true,
         readable: isReadable,
         validFormat: isValidFormat,
-        activePath: isReadable && isValidFormat ? RENDER_SECRET_COOKIE_PATH : null,
+        activePath,
         source: 'render_secret',
       };
     }
