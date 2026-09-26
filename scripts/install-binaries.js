@@ -2,7 +2,7 @@
 /**
  * scripts/install-binaries.js
  * Cross-platform installer for standalone yt-dlp and FFmpeg binaries.
- * Ensures binaries are installed in project ./bin and ./node_modules/.bin on Linux (Render).
+ * Ensures binaries are installed and verified in project ./bin and ./node_modules/.bin on Linux (Render).
  */
 
 import fs from 'node:fs';
@@ -55,17 +55,39 @@ function downloadFile(url, destPath) {
 
 function commandExists(cmd) {
   try {
-    execSync(`command -v ${cmd}`, { stdio: 'ignore' });
+    const whichCmd = process.platform === 'win32' ? `where ${cmd}` : `command -v ${cmd}`;
+    execSync(whichCmd, { stdio: 'ignore' });
     return true;
   } catch {
     return false;
   }
 }
 
+function verifyBinary(binPathOrCmd, name) {
+  try {
+    const flag = name === 'yt-dlp' ? '--version' : '-version';
+    const out = execSync(`"${binPathOrCmd}" ${flag}`, { encoding: 'utf-8', timeout: 10000 });
+    const firstLine = out.split('\n')[0].trim();
+    console.log(`[install-binaries] ${name} verified (${binPathOrCmd}): ${firstLine}`);
+    return true;
+  } catch (e) {
+    console.warn(`[install-binaries] ${name} verification failed at ${binPathOrCmd}: ${e.message}`);
+    return false;
+  }
+}
+
 async function main() {
-  // Only auto-download Linux binaries if on Linux (e.g. Render container)
+  console.log(`[install-binaries] Checking required media binaries (platform: ${process.platform})...`);
+
+  // On non-Linux (e.g. Windows dev machine), verify local binaries without downloading Linux binaries
   if (process.platform !== 'linux') {
-    console.log(`[install-binaries] Platform is ${process.platform}. Skipping Linux binary download.`);
+    const hasYtdlp = commandExists('yt-dlp');
+    const hasFfmpeg = commandExists('ffmpeg');
+    console.log(`[install-binaries] System yt-dlp available: ${hasYtdlp}`);
+    console.log(`[install-binaries] System FFmpeg available: ${hasFfmpeg}`);
+    if (hasYtdlp) verifyBinary('yt-dlp', 'yt-dlp');
+    if (hasFfmpeg) verifyBinary('ffmpeg', 'ffmpeg');
+    console.log('[install-binaries] Non-Linux environment check completed.');
     return;
   }
 
@@ -74,56 +96,118 @@ async function main() {
 
   const ytdlpDest = path.join(binDir, 'yt-dlp');
   const nodeYtdlpDest = path.join(nodeBinDir, 'yt-dlp');
+  const ffmpegDest = path.join(binDir, 'ffmpeg');
+  const nodeFfmpegDest = path.join(nodeBinDir, 'ffmpeg');
 
-  // 1. Install yt-dlp (always ensure v2026.08.19 is present in bin/)
-  if (!fs.existsSync(ytdlpDest)) {
-    console.log(`[install-binaries] Downloading standalone yt-dlp v${YTDLP_VERSION}...`);
-    try {
-      await downloadFile(YTDLP_URL, ytdlpDest);
-      fs.chmodSync(ytdlpDest, 0o755);
-      fs.copyFileSync(ytdlpDest, nodeYtdlpDest);
-      fs.chmodSync(nodeYtdlpDest, 0o755);
-      console.log(`[install-binaries] Successfully installed yt-dlp to ${ytdlpDest}`);
-    } catch (err) {
-      console.error('[install-binaries] Failed to download yt-dlp:', err.message);
+  // ==========================================
+  // 1. yt-dlp Installation & Verification
+  // ==========================================
+  let ytdlpReady = false;
+
+  // Check if ./bin/yt-dlp already exists and works
+  if (fs.existsSync(ytdlpDest)) {
+    if (verifyBinary(ytdlpDest, 'yt-dlp')) {
+      ytdlpReady = true;
+      console.log(`[install-binaries] Existing yt-dlp binary is valid at ${ytdlpDest}`);
+    } else {
+      console.warn(`[install-binaries] Existing yt-dlp at ${ytdlpDest} is invalid/corrupt, redownloading...`);
+      try { fs.unlinkSync(ytdlpDest); } catch {}
     }
-  } else {
-    fs.copyFileSync(ytdlpDest, nodeYtdlpDest);
-    fs.chmodSync(nodeYtdlpDest, 0o755);
-    console.log(`[install-binaries] yt-dlp already present at ${ytdlpDest}`);
   }
 
-  // 2. Install FFmpeg
-  if (!fs.existsSync(ffmpegDest)) {
+  if (!ytdlpReady) {
+    console.log(`[install-binaries] Downloading standalone yt-dlp v${YTDLP_VERSION}...`);
+    await downloadFile(YTDLP_URL, ytdlpDest);
+    fs.chmodSync(ytdlpDest, 0o755);
+    if (!verifyBinary(ytdlpDest, 'yt-dlp')) {
+      throw new Error(`Downloaded yt-dlp at ${ytdlpDest} failed execution verification.`);
+    }
+    ytdlpReady = true;
+    console.log(`[install-binaries] Successfully installed and verified yt-dlp at ${ytdlpDest}`);
+  }
+
+  // Ensure node_modules/.bin also has a working copy
+  try {
+    fs.copyFileSync(ytdlpDest, nodeYtdlpDest);
+    fs.chmodSync(nodeYtdlpDest, 0o755);
+  } catch (copyErr) {
+    console.warn(`[install-binaries] Warning: Could not mirror yt-dlp to node_modules/.bin: ${copyErr.message}`);
+  }
+
+  // ==========================================
+  // 2. FFmpeg Installation & Verification
+  // ==========================================
+  let ffmpegReady = false;
+
+  // Check if system FFmpeg is available (standard on Render Linux image: /usr/bin/ffmpeg)
+  if (commandExists('ffmpeg')) {
+    if (verifyBinary('ffmpeg', 'ffmpeg')) {
+      ffmpegReady = true;
+      console.log('[install-binaries] System FFmpeg is verified and functional.');
+    }
+  }
+
+  // Check if project bin FFmpeg exists and works
+  if (!ffmpegReady && fs.existsSync(ffmpegDest)) {
+    if (verifyBinary(ffmpegDest, 'ffmpeg')) {
+      ffmpegReady = true;
+      console.log(`[install-binaries] Existing FFmpeg binary is valid at ${ffmpegDest}`);
+    } else {
+      console.warn(`[install-binaries] Existing FFmpeg at ${ffmpegDest} is invalid, removing...`);
+      try { fs.unlinkSync(ffmpegDest); } catch {}
+    }
+  }
+
+  // Download static FFmpeg only if no valid FFmpeg is available on the system
+  if (!ffmpegReady) {
     console.log(`[install-binaries] Downloading static FFmpeg v${FFMPEG_VERSION}...`);
     const zipPath = path.join(binDir, 'ffmpeg.zip');
     try {
       await downloadFile(FFMPEG_URL, zipPath);
-      // Unzip using system unzip if available
+      // Unzip using system unzip or tar
       try {
         execSync(`unzip -o "${zipPath}" -d "${binDir}"`, { stdio: 'ignore' });
-        fs.unlinkSync(zipPath);
-        if (fs.existsSync(ffmpegDest)) {
-          fs.chmodSync(ffmpegDest, 0o755);
-          fs.copyFileSync(ffmpegDest, nodeFfmpegDest);
-          fs.chmodSync(nodeFfmpegDest, 0o755);
-          console.log(`[install-binaries] Successfully installed FFmpeg to ${ffmpegDest}`);
+      } catch {
+        execSync(`tar -xf "${zipPath}" -C "${binDir}"`, { stdio: 'ignore' });
+      }
+      try { fs.unlinkSync(zipPath); } catch {}
+
+      if (fs.existsSync(ffmpegDest)) {
+        fs.chmodSync(ffmpegDest, 0o755);
+        if (verifyBinary(ffmpegDest, 'ffmpeg')) {
+          ffmpegReady = true;
+          console.log(`[install-binaries] Successfully installed and verified FFmpeg at ${ffmpegDest}`);
         }
-      } catch (unzipErr) {
-        console.warn('[install-binaries] System unzip failed, trying tar/fallback:', unzipErr.message);
       }
     } catch (err) {
-      console.error('[install-binaries] Failed to download FFmpeg:', err.message);
+      console.error('[install-binaries] Failed to download/extract FFmpeg:', err.message);
     }
-  } else {
-    fs.copyFileSync(ffmpegDest, nodeFfmpegDest);
-    fs.chmodSync(nodeFfmpegDest, 0o755);
-    console.log(`[install-binaries] FFmpeg already present at ${ffmpegDest}`);
   }
+
+  // Mirror to node_modules/.bin if ./bin/ffmpeg exists
+  if (fs.existsSync(ffmpegDest)) {
+    try {
+      fs.copyFileSync(ffmpegDest, nodeFfmpegDest);
+      fs.chmodSync(nodeFfmpegDest, 0o755);
+    } catch (copyErr) {
+      console.warn(`[install-binaries] Warning: Could not mirror FFmpeg to node_modules/.bin: ${copyErr.message}`);
+    }
+  }
+
+  // Final check: yt-dlp must be ready
+  if (!ytdlpReady) {
+    throw new Error('Critical dependency yt-dlp could not be verified.');
+  }
+
+  // Final check: FFmpeg must be ready
+  if (!ffmpegReady) {
+    throw new Error('Critical dependency FFmpeg could not be verified.');
+  }
+
+  console.log('[install-binaries] All critical media binaries successfully verified.');
 }
 
 main().catch((err) => {
-  console.error('[install-binaries] Unexpected error:', err);
-  // Do not fail build if network is unavailable
-  process.exit(0);
+  console.error('[install-binaries] Fatal error during binary installation:', err);
+  process.exit(1);
 });
