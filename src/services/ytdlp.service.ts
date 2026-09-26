@@ -17,33 +17,155 @@ import {
 // Maximum buffer for yt-dlp JSON stdout (15 MB to accommodate playlists)
 const MAX_STDOUT_BYTES = 15 * 1024 * 1024;
 
+export const RENDER_SECRET_COOKIE_PATH = '/etc/secrets/youtube-cookies.txt';
+
+export interface CookieStatus {
+  detected: boolean;
+  readable: boolean;
+  validFormat: boolean;
+  activePath: string | null;
+  source: 'render_secret' | 'env_var' | 'none';
+}
+
 let lastBotBlockTimestamp = 0;
 
 export function recordBotBlock(): void {
   lastBotBlockTimestamp = Date.now();
 }
 
+export function clearBotBlock(): void {
+  lastBotBlockTimestamp = 0;
+}
+
+export function inspectCookieStatus(): CookieStatus {
+  // 1. Primary Render Secret File location
+  try {
+    if (fs.existsSync(RENDER_SECRET_COOKIE_PATH)) {
+      let isReadable = false;
+      let isValidFormat = false;
+
+      try {
+        fs.accessSync(RENDER_SECRET_COOKIE_PATH, fs.constants.R_OK);
+        isReadable = true;
+      } catch {
+        isReadable = false;
+      }
+
+      if (isReadable) {
+        try {
+          // Read only up to 512 bytes to inspect the header line safely without exposing or loading all cookies
+          const fd = fs.openSync(RENDER_SECRET_COOKIE_PATH, 'r');
+          const buf = Buffer.alloc(512);
+          const bytesRead = fs.readSync(fd, buf, 0, 512, 0);
+          fs.closeSync(fd);
+
+          const header = buf.toString('utf-8', 0, bytesRead);
+          const firstLine = header.split(/\r?\n/)[0]?.trim() || '';
+          if (
+            firstLine.startsWith('# HTTP Cookie File') ||
+            firstLine.startsWith('# Netscape HTTP Cookie File')
+          ) {
+            isValidFormat = true;
+          }
+        } catch (err) {
+          logger.warn('Failed reading cookie secret header', { error: String(err) });
+        }
+      }
+
+      return {
+        detected: true,
+        readable: isReadable,
+        validFormat: isValidFormat,
+        activePath: isReadable && isValidFormat ? RENDER_SECRET_COOKIE_PATH : null,
+        source: 'render_secret',
+      };
+    }
+  } catch (err) {
+    logger.warn('Error checking Render secret cookie path', { error: String(err) });
+  }
+
+  // 2. Secondary fallback: YOUTUBE_COOKIES environment variable (for local testing/backward compatibility)
+  const envCookies = env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIES;
+  if (envCookies && envCookies.trim()) {
+    const firstLine = envCookies.trim().split(/\r?\n/)[0]?.trim() || '';
+    const isValidFormat =
+      firstLine.startsWith('# HTTP Cookie File') ||
+      firstLine.startsWith('# Netscape HTTP Cookie File');
+
+    let tempCookiePath: string | null = null;
+    let isReadable = false;
+
+    if (isValidFormat) {
+      try {
+        const cookieFilePath = path.join(os.tmpdir(), 'ytdl_cookies.txt');
+        fs.writeFileSync(cookieFilePath, envCookies.trim(), 'utf-8');
+        tempCookiePath = cookieFilePath;
+        isReadable = true;
+      } catch (err) {
+        logger.warn('Failed writing env cookies to temp file', { error: String(err) });
+      }
+    }
+
+    return {
+      detected: true,
+      readable: isReadable,
+      validFormat: isValidFormat,
+      activePath: tempCookiePath,
+      source: 'env_var',
+    };
+  }
+
+  return {
+    detected: false,
+    readable: false,
+    validFormat: false,
+    activePath: null,
+    source: 'none',
+  };
+}
+
 export function isBotBlockRecent(): boolean {
-  // Flagged as blocked if a bot challenge occurred in the last 3 minutes
+  // If valid cookies are active, server is not blocked by past unauthenticated challenges
+  const cookieStatus = inspectCookieStatus();
+  if (cookieStatus.activePath) {
+    return false;
+  }
   return Date.now() - lastBotBlockTimestamp < 3 * 60 * 1000;
 }
 
 /**
- * Generates --cookies argument if YOUTUBE_COOKIES environment variable or project cookies.txt is provided
+ * Returns --cookies argument if valid Render secret or environment variable is present
  */
 export function getCookieArgs(): string[] {
-  const cookies = env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIES;
-  if (cookies && cookies.trim()) {
-    const cookieFilePath = path.join(os.tmpdir(), 'ytdl_cookies.txt');
-    try {
-      fs.writeFileSync(cookieFilePath, cookies.trim(), 'utf-8');
-      return ['--cookies', cookieFilePath];
-    } catch (err) {
-      logger.warn('Failed to write YOUTUBE_COOKIES to temp file', { error: String(err) });
-    }
+  const status = inspectCookieStatus();
+  if (status.activePath) {
+    return ['--cookies', status.activePath];
   }
-
   return [];
+}
+
+/**
+ * Returns optional --user-agent argument if YOUTUBE_USER_AGENT is configured
+ */
+export function getUserAgentArgs(): string[] {
+  const ua = env.YOUTUBE_USER_AGENT || process.env.YOUTUBE_USER_AGENT;
+  if (ua && ua.trim()) {
+    return ['--user-agent', ua.trim()];
+  }
+  return [];
+}
+
+/**
+ * Returns appropriate extractor player client arguments depending on cookie presence
+ */
+export function getPlayerClientArgs(): string[] {
+  const status = inspectCookieStatus();
+  if (status.activePath) {
+    // When browser session cookies are loaded, use web client that supports cookie authentication
+    return ['--extractor-args', 'youtube:player_client=web,web_embedded,mweb'];
+  }
+  // When no cookies are loaded, use android,web_embedded
+  return ['--extractor-args', 'youtube:player_client=android,web_embedded'];
 }
 
 export function formatDuration(seconds?: number): string {
@@ -508,29 +630,29 @@ export class YtDlpService {
           '--playlist-end',
           String(env.MAX_PLAYLIST_ITEMS + 1),
           '--no-warnings',
-          '--extractor-args',
-          'youtube:player_client=android,web_embedded',
+          ...getPlayerClientArgs(),
           '--skip-download',
           '--remote-components',
           'ejs:github',
           '--js-runtimes',
           `node:${process.execPath}`,
+          ...getUserAgentArgs(),
           ...getCookieArgs(),
           validated.normalizedUrl,
         ];
       } else {
-        // Use android,web_embedded player clients to completely avoid datacenter bot detection while ensuring full format extraction
+        // Dynamic player client args depending on cookie presence
         args = [
           '--dump-single-json',
           '--no-playlist',
           '--no-warnings',
-          '--extractor-args',
-          'youtube:player_client=android,web_embedded',
+          ...getPlayerClientArgs(),
           '--skip-download',
           '--remote-components',
           'ejs:github',
           '--js-runtimes',
           `node:${process.execPath}`,
+          ...getUserAgentArgs(),
           ...getCookieArgs(),
           validated.normalizedUrl,
         ];
@@ -540,21 +662,26 @@ export class YtDlpService {
       try {
         rawJson = await this.executeYtDlp(args);
       } catch (err) {
-        // Fallback retry with android client
+        // Fallback retry with alternative client
         if (validated.type === 'video') {
-          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with android fallback...`);
+          const cookieStatus = inspectCookieStatus();
+          const fallbackClient = cookieStatus.activePath
+            ? 'youtube:player_client=mweb,web'
+            : 'youtube:player_client=android';
+          logger.info(`Extraction with primary client failed for ${validated.id}, retrying with fallback client (${fallbackClient})...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--extractor-args',
-              'youtube:player_client=android',
+              fallbackClient,
               '--skip-download',
               '--remote-components',
               'ejs:github',
               '--js-runtimes',
               `node:${process.execPath}`,
+              ...getUserAgentArgs(),
               ...getCookieArgs(),
               validated.normalizedUrl,
             ];
@@ -584,19 +711,24 @@ export class YtDlpService {
         // Single video
         result = this.normalizeSingleVideo(parsed, validated);
         if (result.type === 'video' && result.formats.length === 0) {
-          logger.info(`0 formats extracted for ${validated.id}, retrying with android fallback...`);
+          const cookieStatus = inspectCookieStatus();
+          const fallbackClient = cookieStatus.activePath
+            ? 'youtube:player_client=mweb,web'
+            : 'youtube:player_client=android';
+          logger.info(`0 formats extracted for ${validated.id}, retrying with fallback client (${fallbackClient})...`);
           try {
             const fallbackArgs = [
               '--dump-single-json',
               '--no-playlist',
               '--no-warnings',
               '--extractor-args',
-              'youtube:player_client=android',
+              fallbackClient,
               '--skip-download',
               '--remote-components',
               'ejs:github',
               '--js-runtimes',
               `node:${process.execPath}`,
+              ...getUserAgentArgs(),
               ...getCookieArgs(),
               validated.normalizedUrl,
             ];
@@ -613,6 +745,7 @@ export class YtDlpService {
       }
 
       if (result.type !== 'video' || result.formats.length > 0) {
+        clearBotBlock();
         metadataCache.set(cacheKey, result);
         metadataCache.set(`${validated.type}:${validated.id}`, result);
       }

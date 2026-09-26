@@ -32,6 +32,7 @@ const envSchema = z.object({
   TEMP_DIR: z.string().default(path.resolve(process.cwd(), 'temp_downloads')),
   RATE_LIMIT_MAX: z.coerce.number().positive().default(500),
   YOUTUBE_COOKIES: z.string().optional(),
+  YOUTUBE_USER_AGENT: z.string().optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

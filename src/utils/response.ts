@@ -2,11 +2,11 @@ import { Response } from 'express';
 import { ApiErrorResponse } from '../types/api.types.js';
 
 export function sendSuccess<T>(res: Response, data?: T, statusCode = 200): Response {
-  if (data && typeof data === 'object' && 'status' in data && Object.keys(data).length === 1) {
-    // Specialized format matching { success: true, status: 'ok' }
+  if (data && typeof data === 'object' && 'status' in data) {
     return res.status(statusCode).json({
       success: true,
-      ...(data as Record<string, unknown>),
+      status: (data as Record<string, unknown>).status,
+      data,
     });
   }
 

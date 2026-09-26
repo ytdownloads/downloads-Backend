@@ -8,7 +8,7 @@ import { logger } from '../utils/logger.js';
 import { BatchJob, batchJobRegistry } from './batchJobRegistry.service.js';
 import { BatchItemData } from '../types/download.types.js';
 import { sanitizeCleanFilename } from '../utils/filename.js';
-import { getCookieArgs } from './ytdlp.service.js';
+import { getCookieArgs, getUserAgentArgs, getPlayerClientArgs } from './ytdlp.service.js';
 
 const VALID_VIDEO_FORMAT_REGEX = /^video-(\d{3,4})p$/;
 
@@ -113,10 +113,12 @@ export class PlaylistQueueService {
         '10M',
         '--concurrent-fragments',
         '4',
-        '--extractor-args',
-        'youtube:player_client=android,web_embedded',
+        ...getPlayerClientArgs(),
+        '--remote-components',
+        'ejs:github',
         '--js-runtimes',
         `node:${process.execPath}`,
+        ...getUserAgentArgs(),
         ...getCookieArgs(),
         '--paths',
         `home:${itemDir}`,
