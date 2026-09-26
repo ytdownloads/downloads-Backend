@@ -6,12 +6,12 @@ import { z } from 'zod';
 // Load environment variables from .env file if available
 dotenv.config();
 
-// Ensure local bin directory is in PATH for standalone yt-dlp binaries
+// Ensure local bin directory is in PATH with highest priority for standalone yt-dlp
 const candidateBins = [
-  path.resolve(process.cwd(), 'bin'),
-  path.resolve(process.cwd(), '..', 'bin'),
-  path.resolve(process.cwd(), 'backend', 'bin'),
   path.resolve(process.cwd(), 'node_modules', '.bin'),
+  path.resolve(process.cwd(), 'backend', 'bin'),
+  path.resolve(process.cwd(), '..', 'bin'),
+  path.resolve(process.cwd(), 'bin'),
 ];
 for (const binPath of candidateBins) {
   if (fs.existsSync(binPath)) {
@@ -26,7 +26,7 @@ const envSchema = z.object({
   DOWNLOAD_CONCURRENCY: z.coerce.number().positive().default(1),
   DOWNLOAD_TIMEOUT_MS: z.coerce.number().positive().default(600000),
   FFMPEG_TIMEOUT_MS: z.coerce.number().positive().default(1800000),
-  INFO_TIMEOUT_MS: z.coerce.number().positive().default(60000),
+  INFO_TIMEOUT_MS: z.coerce.number().positive().default(25000),
   MAX_PLAYLIST_ITEMS: z.coerce.number().positive().default(30),
   JOB_CLEANUP_DELAY_MS: z.coerce.number().positive().default(300000),
   TEMP_DIR: z.string().default(path.resolve(process.cwd(), 'temp_downloads')),
