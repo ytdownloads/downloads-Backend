@@ -169,7 +169,7 @@ export function getUserAgentArgs(): string[] {
   return [];
 }
 
-export const DEFAULT_PLAYER_CLIENT = 'mweb,web';
+export const DEFAULT_PLAYER_CLIENT = 'android_vr,web_embedded';
 
 export function getExtractorClientConfigString(): string {
   const customClient = env.YOUTUBE_PLAYER_CLIENT || process.env.YOUTUBE_PLAYER_CLIENT;
@@ -660,11 +660,53 @@ export class YtDlpService {
       const cookieStatus = inspectCookieStatus();
 
       // Ordered extraction strategies:
-      // 1. Authenticated full formats with Render secret cookies (Fastest, full 4K resolutions, bypasses datacenter challenges)
-      // 2. Android VR + Web Embedded (Direct unauthenticated client)
-      // 3. Web Embedded fallback
-      // 4. TV embedded client fallback
-      const strategies: Array<{ name: string; args: string[] }> = [];
+      // 1. Android VR + Web Embedded (Fastest on cloud/datacenter IPs, exempt from PO token bot challenges)
+      // 2. Web Embedded fallback (exempt from PO token bot challenges, covers videos excluded by android_vr)
+      // 3. Authenticated web/mweb with Render secret cookies (if cookies configured, for age-restricted/authenticated content)
+      // 4. TV embedded client fallback (alternative mobile/smart TV endpoint)
+      const strategies: Array<{ name: string; args: string[] }> = [
+        {
+          name: 'android_vr_direct',
+          args: [
+            '--dump-single-json',
+            ...(validated.type === 'playlist'
+              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+              : ['--no-playlist']),
+            '--no-warnings',
+            '--socket-timeout',
+            '15',
+            '--retries',
+            '3',
+            ...getPlayerClientArgs(),
+            '--skip-download',
+            '--js-runtimes',
+            `node:${process.execPath}`,
+            ...getUserAgentArgs(),
+            validated.normalizedUrl,
+          ],
+        },
+        {
+          name: 'web_embedded_fallback',
+          args: [
+            '--dump-single-json',
+            ...(validated.type === 'playlist'
+              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+              : ['--no-playlist']),
+            '--no-warnings',
+            '--socket-timeout',
+            '15',
+            '--retries',
+            '3',
+            '--extractor-args',
+            'youtube:player_client=web_embedded,android_vr',
+            '--skip-download',
+            '--js-runtimes',
+            `node:${process.execPath}`,
+            ...getUserAgentArgs(),
+            validated.normalizedUrl,
+          ],
+        },
+      ];
 
       if (cookieStatus.activePath) {
         strategies.push({
@@ -678,7 +720,7 @@ export class YtDlpService {
             '--socket-timeout',
             '15',
             '--retries',
-            '2',
+            '3',
             '--extractor-args',
             'youtube:player_client=mweb,web',
             '--skip-download',
@@ -692,49 +734,6 @@ export class YtDlpService {
       }
 
       strategies.push({
-        name: 'android_vr_direct',
-        args: [
-          '--dump-single-json',
-          ...(validated.type === 'playlist'
-            ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
-            : ['--no-playlist']),
-          '--no-warnings',
-          '--socket-timeout',
-          '15',
-          '--retries',
-          '2',
-          ...getPlayerClientArgs(),
-          '--skip-download',
-          '--js-runtimes',
-          `node:${process.execPath}`,
-          ...getUserAgentArgs(),
-          validated.normalizedUrl,
-        ],
-      });
-
-      strategies.push({
-        name: 'web_embedded_fallback',
-        args: [
-          '--dump-single-json',
-          ...(validated.type === 'playlist'
-            ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
-            : ['--no-playlist']),
-          '--no-warnings',
-          '--socket-timeout',
-          '15',
-          '--retries',
-          '2',
-          '--extractor-args',
-          'youtube:player_client=web_embedded,android_vr',
-          '--skip-download',
-          '--js-runtimes',
-          `node:${process.execPath}`,
-          ...getUserAgentArgs(),
-          validated.normalizedUrl,
-        ],
-      });
-
-      strategies.push({
         name: 'tv_embedded_fallback',
         args: [
           '--dump-single-json',
@@ -745,7 +744,7 @@ export class YtDlpService {
           '--socket-timeout',
           '15',
           '--retries',
-          '2',
+          '3',
           '--extractor-args',
           'youtube:player_client=tv_embedded,web_embedded',
           '--skip-download',
