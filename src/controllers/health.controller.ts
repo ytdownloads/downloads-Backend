@@ -35,22 +35,6 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
     return;
   }
 
-  if (_req.query.probe === '1') {
-    try {
-      const client = (_req.query.client as string) || 'android_vr,web_embedded';
-      const cookieStatus = inspectCookieStatus();
-      const useCookies = _req.query.cookies === '1';
-      const cookieArg = useCookies && cookieStatus.activePath
-        ? `--cookies "${cookieStatus.activePath}" `
-        : '';
-      const cmd = `yt-dlp --simulate -v ${cookieArg}--extractor-args "youtube:player_client=${client}" --js-runtimes node https://www.youtube.com/watch?v=jNQXAC9IVRw`;
-      const result = await execAsync(cmd, { timeout: 25000 });
-      res.json({ success: true, client, stdout: result.stdout, stderr: result.stderr });
-    } catch (err: any) {
-      res.json({ success: false, error: err.message, stdout: err.stdout, stderr: err.stderr });
-    }
-    return;
-  }
 
   // 1. Verify yt-dlp
   if (!cachedYtdlpVersion || cachedYtdlpVersion.startsWith('error')) {
