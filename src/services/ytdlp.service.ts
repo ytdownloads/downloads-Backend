@@ -169,7 +169,7 @@ export function getUserAgentArgs(): string[] {
   return [];
 }
 
-export const DEFAULT_PLAYER_CLIENT = 'android_vr,web_embedded';
+export const DEFAULT_PLAYER_CLIENT = 'mweb,web';
 
 export function getExtractorClientConfigString(): string {
   const customClient = env.YOUTUBE_PLAYER_CLIENT || process.env.YOUTUBE_PLAYER_CLIENT;
@@ -668,7 +668,7 @@ export class YtDlpService {
 
       if (cookieStatus.activePath) {
         strategies.push({
-          name: 'authenticated_full_formats',
+          name: 'mweb_authenticated',
           args: [
             '--dump-single-json',
             ...(validated.type === 'playlist'
@@ -680,7 +680,7 @@ export class YtDlpService {
             '--retries',
             '2',
             '--extractor-args',
-            'youtube:player_client=android_vr,web',
+            'youtube:player_client=mweb,web',
             '--skip-download',
             '--js-runtimes',
             `node:${process.execPath}`,
