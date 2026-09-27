@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { sendSuccess } from '../utils/response.js';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { inspectCookieStatus, isBotBlockRecent } from '../services/ytdlp.service.js';
+import { inspectCookieStatus, isBotBlockRecent, getExtractorClientConfigString } from '../services/ytdlp.service.js';
 
 const execAsync = promisify(exec);
 let cachedYtdlpVersion = '';
@@ -105,7 +105,7 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
       available: ytdlpHealthy,
       jsRuntime: 'node',
       ejsAvailable: true,
-      extractorConfiguration: 'youtube:player_client=android,ios',
+      extractorConfiguration: getExtractorClientConfigString(),
     },
     ffmpeg: {
       version: cachedFfmpegVersion,

@@ -169,13 +169,29 @@ export function getUserAgentArgs(): string[] {
   return [];
 }
 
+export const DEFAULT_PLAYER_CLIENT = 'android_vr,web_embedded';
+
+export function getExtractorClientConfigString(): string {
+  const customClient = env.YOUTUBE_PLAYER_CLIENT || process.env.YOUTUBE_PLAYER_CLIENT;
+  const client = customClient && customClient.trim() ? customClient.trim() : DEFAULT_PLAYER_CLIENT;
+  return `youtube:player_client=${client}`;
+}
+
 /**
  * Returns appropriate extractor player client arguments depending on environment.
- * The android,ios mobile API clients are the fastest and most reliable on cloud/datacenter IPs,
- * avoiding Web Proof-of-Origin bot detection challenges entirely.
+ * The android_vr,web_embedded clients do not require a Proof-of-Origin (PO) token
+ * and are not blocked by YouTube bot-detection challenges on cloud/datacenter IPs.
  */
 export function getPlayerClientArgs(): string[] {
-  return ['--extractor-args', 'youtube:player_client=android,ios'];
+  const customClient = env.YOUTUBE_PLAYER_CLIENT || process.env.YOUTUBE_PLAYER_CLIENT;
+  const client = customClient && customClient.trim() ? customClient.trim() : DEFAULT_PLAYER_CLIENT;
+  const poToken = env.YOUTUBE_PO_TOKEN || env.PO_TOKEN || process.env.YOUTUBE_PO_TOKEN || process.env.PO_TOKEN;
+
+  const args = ['--extractor-args', `youtube:player_client=${client}`];
+  if (poToken && poToken.trim()) {
+    args.push('--extractor-args', `youtube:po_token=${poToken.trim()}`);
+  }
+  return args;
 }
 
 export function formatDuration(seconds?: number): string {
@@ -644,12 +660,13 @@ export class YtDlpService {
       const cookieStatus = inspectCookieStatus();
 
       // Ordered extraction strategies:
-      // 1. Android/iOS mobile API (Fastest on datacenter IPs, immune to Web Proof-of-Origin bot detection, extracts full resolutions)
-      // 2. Authenticated web/mweb with Render secret cookies (if cookies configured, for age-restricted/authenticated content)
-      // 3. TV embedded client fallback (alternative mobile/smart TV endpoint)
+      // 1. Android VR + Web Embedded (Fastest on cloud/datacenter IPs, exempt from PO token bot challenges)
+      // 2. Web Embedded fallback (exempt from PO token bot challenges, covers videos excluded by android_vr)
+      // 3. Authenticated web/mweb with Render secret cookies (if cookies configured, for age-restricted/authenticated content)
+      // 4. TV embedded client fallback (alternative mobile/smart TV endpoint)
       const strategies: Array<{ name: string; args: string[] }> = [
         {
-          name: 'android_ios_direct',
+          name: 'android_vr_direct',
           args: [
             '--dump-single-json',
             ...(validated.type === 'playlist'
@@ -661,6 +678,27 @@ export class YtDlpService {
             '--retries',
             '3',
             ...getPlayerClientArgs(),
+            '--skip-download',
+            '--js-runtimes',
+            `node:${process.execPath}`,
+            ...getUserAgentArgs(),
+            validated.normalizedUrl,
+          ],
+        },
+        {
+          name: 'web_embedded_fallback',
+          args: [
+            '--dump-single-json',
+            ...(validated.type === 'playlist'
+              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+              : ['--no-playlist']),
+            '--no-warnings',
+            '--socket-timeout',
+            '15',
+            '--retries',
+            '3',
+            '--extractor-args',
+            'youtube:player_client=web_embedded,android_vr',
             '--skip-download',
             '--js-runtimes',
             `node:${process.execPath}`,
