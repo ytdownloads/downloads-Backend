@@ -67,10 +67,14 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
         : '';
       const potBaseArg = `--extractor-args "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416"`;
 
+      const withCookies = _req.query.cookies === '1' || _req.query.with_cookies === '1';
+      const cookieStatus = inspectCookieStatus();
+      const cookieArg = withCookies && cookieStatus.activePath ? `--cookies "${cookieStatus.activePath}"` : '';
+
       let ytdlpDebug = '';
       let ytdlpSuccess = false;
       try {
-        const cmd = `yt-dlp --plugin-dirs "${pluginsDir}" ${potBaseArg} ${clientArg} ${tokenArg} -v --simulate "${targetUrl}"`;
+        const cmd = `yt-dlp --plugin-dirs "${pluginsDir}" ${potBaseArg} ${clientArg} ${tokenArg} ${cookieArg} -v --simulate "${targetUrl}"`;
         const { stdout, stderr } = await execAsync(cmd, { timeout: 20000 });
         ytdlpDebug = (stderr || stdout).slice(0, 3000);
         ytdlpSuccess = true;
