@@ -66,16 +66,15 @@ export function errorHandler(
 
   // Unhandled internal server error
   logger.error('Unhandled server error:', {
-    message: err.message,
-    stack: env.NODE_ENV === 'development' ? err.stack : undefined,
+    message: err?.message,
+    stack: err?.stack,
   });
 
-  const message =
-    env.NODE_ENV === 'production'
-      ? 'An internal server error occurred. Please try again later.'
-      : err.message || 'Internal Server Error';
-
-  sendError(res, 'INTERNAL_SERVER_ERROR', message, 500);
+  sendError(res, 'INTERNAL_SERVER_ERROR', err?.message || 'An internal server error occurred.', 500, {
+    errorName: err?.name,
+    errorMessage: err?.message,
+    errorStack: err?.stack ? err.stack.split('\n').slice(0, 4) : undefined,
+  });
 }
 
 export function notFoundHandler(req: Request, res: Response): void {

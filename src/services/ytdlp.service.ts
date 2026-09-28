@@ -699,7 +699,6 @@ export class YtDlpService {
             '--js-runtimes',
             `node:${process.execPath}`,
             ...getUserAgentArgs(),
-            ...getCookieArgs(),
             validated.normalizedUrl,
           ],
         });
@@ -723,7 +722,6 @@ export class YtDlpService {
             '--js-runtimes',
             `node:${process.execPath}`,
             ...getUserAgentArgs(),
-            ...getCookieArgs(),
             validated.normalizedUrl,
           ],
         });
