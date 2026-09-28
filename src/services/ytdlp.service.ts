@@ -662,199 +662,123 @@ export class YtDlpService {
       const potArgs = potProviderService.getYtDlpArgs();
       const isPotActive = potProviderService.getStatus().active;
 
-      // Ordered extraction strategies:
-      // 1. Dynamic POT Provider with mweb,web (authenticates with fresh dynamic PO tokens minted on server IP)
-      // 2. Dynamic POT Provider with web,android_vr
-      // 3. Android VR Direct (fallback for when POT provider is not active or video client needs alternative)
-      // 4. Web Embedded fallback
-      // 5. Authenticated web/mweb with Render secret cookies (if cookies configured)
-      // 6. TV embedded client fallback
-      const strategies: Array<{ name: string; args: string[] }> = [];
+      // Primary extraction strategy:
+      // Uses dynamic POT Provider (if active) + Configured Cookies (if any) +
+      // Best player clients (mweb,web,android_vr).
+      // Bounded socket-timeout (10s) and bounded retries (1) to fail fast on network blocks.
+      const primaryArgs: string[] = [
+        '--dump-single-json',
+        ...(validated.type === 'playlist'
+          ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+          : ['--no-playlist']),
+        '--no-warnings',
+        '--socket-timeout',
+        '10',
+        '--retries',
+        '1',
+        ...(isPotActive ? potArgs : []),
+        '--extractor-args',
+        'youtube:player_client=mweb,web,android_vr',
+        '--skip-download',
+        '--js-runtimes',
+        `node:${process.execPath}`,
+        ...getUserAgentArgs(),
+        ...getCookieArgs(),
+        validated.normalizedUrl,
+      ];
 
-      if (isPotActive) {
-        strategies.push({
-          name: 'pot_mweb_web',
-          args: [
-            '--dump-single-json',
-            ...(validated.type === 'playlist'
-              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
-              : ['--no-playlist']),
-            '--no-warnings',
-            '--socket-timeout',
-            '15',
-            '--retries',
-            '3',
-            ...potArgs,
-            '--extractor-args',
-            'youtube:player_client=mweb,web',
-            '--skip-download',
-            '--js-runtimes',
-            `node:${process.execPath}`,
-            ...getUserAgentArgs(),
-            validated.normalizedUrl,
-          ],
-        });
-
-        strategies.push({
-          name: 'pot_android_vr',
-          args: [
-            '--dump-single-json',
-            ...(validated.type === 'playlist'
-              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
-              : ['--no-playlist']),
-            '--no-warnings',
-            '--socket-timeout',
-            '15',
-            '--retries',
-            '3',
-            ...potArgs,
-            '--extractor-args',
-            'youtube:player_client=android_vr,web_embedded',
-            '--skip-download',
-            '--js-runtimes',
-            `node:${process.execPath}`,
-            ...getUserAgentArgs(),
-            validated.normalizedUrl,
-          ],
-        });
-      }
-
-      strategies.push(
-        {
-          name: 'android_vr_direct',
-          args: [
-            '--dump-single-json',
-            ...(validated.type === 'playlist'
-              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
-              : ['--no-playlist']),
-            '--no-warnings',
-            '--socket-timeout',
-            '15',
-            '--retries',
-            '3',
-            ...getPlayerClientArgs(),
-            '--skip-download',
-            '--js-runtimes',
-            `node:${process.execPath}`,
-            ...getUserAgentArgs(),
-            validated.normalizedUrl,
-          ],
-        },
-        {
-          name: 'web_embedded_fallback',
-          args: [
-            '--dump-single-json',
-            ...(validated.type === 'playlist'
-              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
-              : ['--no-playlist']),
-            '--no-warnings',
-            '--socket-timeout',
-            '15',
-            '--retries',
-            '3',
-            '--extractor-args',
-            'youtube:player_client=web_embedded,android_vr',
-            '--skip-download',
-            '--js-runtimes',
-            `node:${process.execPath}`,
-            ...getUserAgentArgs(),
-            validated.normalizedUrl,
-          ],
-        }
-      );
-
-      if (cookieStatus.activePath) {
-        strategies.push({
-          name: 'mweb_authenticated',
-          args: [
-            '--dump-single-json',
-            ...(validated.type === 'playlist'
-              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
-              : ['--no-playlist']),
-            '--no-warnings',
-            '--socket-timeout',
-            '15',
-            '--retries',
-            '3',
-            '--extractor-args',
-            'youtube:player_client=mweb,web',
-            '--skip-download',
-            '--js-runtimes',
-            `node:${process.execPath}`,
-            ...getUserAgentArgs(),
-            ...getCookieArgs(),
-            validated.normalizedUrl,
-          ],
-        });
-      }
-
-      strategies.push({
-        name: 'tv_embedded_fallback',
-        args: [
-          '--dump-single-json',
-          ...(validated.type === 'playlist'
-            ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
-            : ['--no-playlist']),
-          '--no-warnings',
-          '--socket-timeout',
-          '15',
-          '--retries',
-          '3',
-          '--extractor-args',
-          'youtube:player_client=tv_embedded,web_embedded',
-          '--skip-download',
-          '--js-runtimes',
-          `node:${process.execPath}`,
-          ...getUserAgentArgs(),
-          validated.normalizedUrl,
-        ],
-      });
+      // Fallback strategy: TV embedded / web embedded (only used if primary fails with transient non-definitive error)
+      const fallbackArgs: string[] = [
+        '--dump-single-json',
+        ...(validated.type === 'playlist'
+          ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+          : ['--no-playlist']),
+        '--no-warnings',
+        '--socket-timeout',
+        '10',
+        '--retries',
+        '1',
+        '--extractor-args',
+        'youtube:player_client=tv_embedded,web_embedded',
+        '--skip-download',
+        '--js-runtimes',
+        `node:${process.execPath}`,
+        ...getUserAgentArgs(),
+        validated.normalizedUrl,
+      ];
 
       let lastError: any = null;
-      let hadBotBlock = false;
 
-      for (const strategy of strategies) {
-        try {
-          logger.debug(`Attempting metadata extraction with strategy: ${strategy.name}`);
-          const rawJson = await this.executeYtDlp(strategy.args);
-          const parsed: RawYtDlpOutput = JSON.parse(rawJson);
+      // 1. Execute Primary Strategy
+      try {
+        logger.debug(`Attempting metadata extraction with primary strategy for ${validated.id}`);
+        const rawJson = await this.executeYtDlp(primaryArgs);
+        const parsed: RawYtDlpOutput = JSON.parse(rawJson);
 
-          let result: MediaInfoResult;
-          if (parsed._type === 'playlist' || validated.type === 'playlist') {
-            result = this.normalizePlaylist(parsed, validated);
-          } else {
-            result = this.normalizeSingleVideo(parsed, validated);
-            // If video yielded 0 formats, try the next strategy
-            if (result.type === 'video' && result.formats.length === 0) {
-              logger.warn(`Strategy ${strategy.name} extracted 0 formats for ${validated.id}, trying next strategy...`);
-              continue;
+        let result: MediaInfoResult;
+        if (parsed._type === 'playlist' || validated.type === 'playlist') {
+          result = this.normalizePlaylist(parsed, validated);
+        } else {
+          result = this.normalizeSingleVideo(parsed, validated);
+        }
+
+        clearBotBlock();
+        metadataCache.set(cacheKey, result);
+        metadataCache.set(`${validated.type}:${validated.id}`, result);
+        return result;
+      } catch (err: any) {
+        lastError = err;
+
+        // Immediate abort for definitive, non-retryable errors.
+        // Do NOT waste ~50s cascading through alternate strategies when YouTube definitively rejects access!
+        if (err instanceof AppError) {
+          if (
+            err.code === 'BOT_DETECTION_BLOCKED' ||
+            err.code === 'VIDEO_UNAVAILABLE' ||
+            err.code === 'AGE_RESTRICTED' ||
+            err.code === 'PLAYLIST_UNAVAILABLE' ||
+            err.code === 'INVALID_URL' ||
+            err.code === 'TIMEOUT' ||
+            err.statusCode === 504
+          ) {
+            if (err.code === 'BOT_DETECTION_BLOCKED') {
+              recordBotBlock();
             }
-          }
-
-          clearBotBlock();
-          metadataCache.set(cacheKey, result);
-          metadataCache.set(`${validated.type}:${validated.id}`, result);
-          return result;
-        } catch (err: any) {
-          lastError = err;
-          if (err instanceof AppError && err.code === 'BOT_DETECTION_BLOCKED') {
-            hadBotBlock = true;
-          }
-          // Do not attempt further long-running strategies if request timed out
-          if (err instanceof AppError && err.statusCode === 504) {
+            logger.warn(`Immediate abort on definitive error for ${validated.id}: ${err.code}`);
             throw err;
           }
-          logger.warn(`Strategy ${strategy.name} failed for ${validated.id}`, {
-            error: err.message,
-            code: err instanceof AppError ? err.code : 'UNKNOWN',
-          });
         }
+
+        logger.warn(`Primary extraction failed for ${validated.id}, attempting single fallback...`, {
+          error: err.message,
+          code: err instanceof AppError ? err.code : 'UNKNOWN',
+        });
       }
 
-      if (hadBotBlock) {
-        recordBotBlock();
+      // 2. Single Bounded Fallback (only for transient non-definitive errors)
+      try {
+        logger.debug(`Attempting metadata extraction with fallback strategy for ${validated.id}`);
+        const rawJson = await this.executeYtDlp(fallbackArgs);
+        const parsed: RawYtDlpOutput = JSON.parse(rawJson);
+
+        let result: MediaInfoResult;
+        if (parsed._type === 'playlist' || validated.type === 'playlist') {
+          result = this.normalizePlaylist(parsed, validated);
+        } else {
+          result = this.normalizeSingleVideo(parsed, validated);
+        }
+
+        clearBotBlock();
+        metadataCache.set(cacheKey, result);
+        metadataCache.set(`${validated.type}:${validated.id}`, result);
+        return result;
+      } catch (fallbackErr: any) {
+        lastError = fallbackErr;
+        if (fallbackErr instanceof AppError && fallbackErr.code === 'BOT_DETECTION_BLOCKED') {
+          recordBotBlock();
+        }
+        throw lastError || new AppError('METADATA_FAILED', 'Failed to extract media metadata.', 500);
       }
-      throw lastError || new AppError('METADATA_FAILED', 'Failed to extract media metadata.', 500);
     } finally {
       const duration = Date.now() - startTime;
       logger.info(`Finished metadata extraction for id: ${validated.id} in ${duration}ms`);

@@ -70,7 +70,7 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
   const cookieStatus = inspectCookieStatus();
   const potStatus = potProviderService.getStatus();
   const isBotBlocked = isBotBlockRecent();
-  const isReady = ytdlpHealthy && ffmpegHealthy && !isBotBlocked;
+  const isReady = ytdlpHealthy && ffmpegHealthy;
 
   // Safe non-sensitive cookie diagnostics
   const safeCookieInfo = {
@@ -88,15 +88,17 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
       data: {
         status: 'offline',
         ready: false,
-        reason: isBotBlocked ? 'BOT_DETECTION_BLOCKED' : 'DEPENDENCIES_UNAVAILABLE',
-        message: isBotBlocked
-          ? 'YouTube is temporarily blocking datacenter requests from this server IP. Configure youtube-cookies.txt in Render Secret Files to authenticate.'
-          : 'Required media dependencies are not operational.',
+        reason: 'DEPENDENCIES_UNAVAILABLE',
+        message: 'Required media dependencies (yt-dlp or ffmpeg) are not operational.',
         cookies: safeCookieInfo,
         potProvider: {
           active: potStatus.active,
           version: potStatus.version,
           port: potStatus.port,
+        },
+        botDetection: {
+          recentBlock: isBotBlocked,
+          status: isBotBlocked ? 'degraded_for_some_videos' : 'normal',
         },
         ytdlpVersion: cachedYtdlpVersion,
         ffmpegVersion: cachedFfmpegVersion,
@@ -114,6 +116,10 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
       active: potStatus.active,
       version: potStatus.version,
       port: potStatus.port,
+    },
+    botDetection: {
+      recentBlock: isBotBlocked,
+      status: isBotBlocked ? 'degraded_for_some_videos' : 'normal',
     },
     ytdlp: {
       version: cachedYtdlpVersion,
