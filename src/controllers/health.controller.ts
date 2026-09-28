@@ -49,13 +49,31 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
         cliError = e.message;
       }
 
+      const targetUrl = (_req.query.url as string) || 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+      const client = (_req.query.client as string) || 'android_vr,web_embedded';
+      const withToken = _req.query.with_token === '1';
+
+      let parsedToken = '';
+      if (cliToken) {
+        try {
+          const parsed = JSON.parse(cliToken);
+          parsedToken = parsed.poToken || '';
+        } catch {}
+      }
+
+      const clientArg = client === 'none' ? '' : `--extractor-args "youtube:player_client=${client}"`;
+      const tokenArg = withToken && parsedToken
+        ? `--extractor-args "youtube:po_token=web.gvs+${parsedToken},web.player+${parsedToken}"`
+        : '';
+      const potBaseArg = `--extractor-args "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416"`;
+
       let ytdlpDebug = '';
+      let ytdlpSuccess = false;
       try {
-        const { stdout, stderr } = await execAsync(
-          `yt-dlp --plugin-dirs "${pluginsDir}" --js-runtimes "node:${process.execPath}" --extractor-args "youtube:player_client=mweb,web" -v --simulate "https://www.youtube.com/watch?v=jNQXAC9IVRw"`,
-          { timeout: 20000 }
-        );
+        const cmd = `yt-dlp --plugin-dirs "${pluginsDir}" ${potBaseArg} ${clientArg} ${tokenArg} -v --simulate "${targetUrl}"`;
+        const { stdout, stderr } = await execAsync(cmd, { timeout: 20000 });
         ytdlpDebug = (stderr || stdout).slice(0, 3000);
+        ytdlpSuccess = true;
       } catch (e: any) {
         ytdlpDebug = (e.stderr || e.stdout || e.message).slice(0, 3000);
       }
@@ -66,8 +84,9 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
         potBin,
         pluginsDir,
         pingResult,
-        cliToken,
+        cliTokenSnippet: parsedToken ? `${parsedToken.slice(0, 20)}...` : 'none',
         cliError,
+        ytdlpSuccess,
         ytdlpDebug,
       });
       return;
