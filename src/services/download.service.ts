@@ -8,6 +8,7 @@ import { validateYouTubeUrl } from './urlValidation.service.js';
 import { jobRegistry, DownloadJob } from './jobRegistry.service.js';
 import { sanitizeCleanFilename } from '../utils/filename.js';
 import { metadataCache, getCookieArgs, getUserAgentArgs, getPlayerClientArgs, recordBotBlock } from './ytdlp.service.js';
+import { potProviderService } from './potProvider.service.js';
 
 const VALID_VIDEO_FORMAT_REGEX = /^video-(\d{3,4})p$/;
 
@@ -82,6 +83,7 @@ export class DownloadService {
       '3',
       '--fragment-retries',
       '3',
+      ...potProviderService.getYtDlpArgs(),
       ...getPlayerClientArgs(),
       '--js-runtimes',
       `node:${process.execPath}`,

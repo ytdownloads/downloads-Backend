@@ -6,6 +6,7 @@ import { logger } from './utils/logger.js';
 import { CleanupService } from './services/cleanup.service.js';
 import { jobRegistry } from './services/jobRegistry.service.js';
 import { batchJobRegistry } from './services/batchJobRegistry.service.js';
+import { potProviderService } from './services/potProvider.service.js';
 
 // Prepend project-local bin, node_modules/.bin, and node runtime directories to PATH
 const projectBin = path.resolve(process.cwd(), 'bin');
@@ -24,6 +25,9 @@ const app = createApp();
 
 // Execute temporary directory startup cleanup
 void CleanupService.startupCleanup();
+
+// Start Proof-of-Origin Token provider service in background
+void potProviderService.start();
 
 const server = app.listen(env.PORT, '0.0.0.0', () => {
   logger.info(`Server running in ${env.NODE_ENV} mode on 0.0.0.0:${env.PORT}`, {
@@ -60,6 +64,12 @@ function shutdown(signal: string) {
     batchJobRegistry.shutdownAll();
   } catch (err) {
     logger.error('Error shutting down batchJobRegistry:', { error: (err as Error).message });
+  }
+
+  try {
+    potProviderService.shutdown();
+  } catch (err) {
+    logger.error('Error shutting down potProviderService:', { error: (err as Error).message });
   }
 
   server.close(() => {

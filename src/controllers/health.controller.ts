@@ -3,6 +3,7 @@ import { sendSuccess } from '../utils/response.js';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { inspectCookieStatus, isBotBlockRecent, getExtractorClientConfigString } from '../services/ytdlp.service.js';
+import { potProviderService } from '../services/potProvider.service.js';
 
 const execAsync = promisify(exec);
 let cachedYtdlpVersion = '';
@@ -65,6 +66,7 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
   const ytdlpHealthy = Boolean(cachedYtdlpVersion && !cachedYtdlpVersion.startsWith('error'));
   const ffmpegHealthy = Boolean(cachedFfmpegVersion && !cachedFfmpegVersion.startsWith('error'));
   const cookieStatus = inspectCookieStatus();
+  const potStatus = potProviderService.getStatus();
   const isBotBlocked = isBotBlockRecent();
   const isReady = ytdlpHealthy && ffmpegHealthy && !isBotBlocked;
 
@@ -89,6 +91,11 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
           ? 'YouTube is temporarily blocking datacenter requests from this server IP. Configure youtube-cookies.txt in Render Secret Files to authenticate.'
           : 'Required media dependencies are not operational.',
         cookies: safeCookieInfo,
+        potProvider: {
+          active: potStatus.active,
+          version: potStatus.version,
+          port: potStatus.port,
+        },
         ytdlpVersion: cachedYtdlpVersion,
         ffmpegVersion: cachedFfmpegVersion,
       },
@@ -101,6 +108,11 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
     ready: true,
     version: '1.0.0',
     cookies: safeCookieInfo,
+    potProvider: {
+      active: potStatus.active,
+      version: potStatus.version,
+      port: potStatus.port,
+    },
     ytdlp: {
       version: cachedYtdlpVersion,
       available: ytdlpHealthy,

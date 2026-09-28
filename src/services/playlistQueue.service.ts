@@ -9,6 +9,7 @@ import { BatchJob, batchJobRegistry } from './batchJobRegistry.service.js';
 import { BatchItemData } from '../types/download.types.js';
 import { sanitizeCleanFilename } from '../utils/filename.js';
 import { getCookieArgs, getUserAgentArgs, getPlayerClientArgs } from './ytdlp.service.js';
+import { potProviderService } from './potProvider.service.js';
 
 const VALID_VIDEO_FORMAT_REGEX = /^video-(\d{3,4})p$/;
 
@@ -119,6 +120,7 @@ export class PlaylistQueueService {
         '3',
         '--fragment-retries',
         '3',
+        ...potProviderService.getYtDlpArgs(),
         ...getPlayerClientArgs(),
         '--js-runtimes',
         `node:${process.execPath}`,

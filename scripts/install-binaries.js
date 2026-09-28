@@ -15,6 +15,7 @@ const FFMPEG_VERSION = '6.1';
 
 const YTDLP_URL = `https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp`;
 const FFMPEG_URL = `https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v${FFMPEG_VERSION}/ffmpeg-${FFMPEG_VERSION}-linux-64.zip`;
+const BGUTIL_POT_URL = 'https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest/download/bgutil-pot-linux-x86_64';
 
 const rootDir = process.cwd();
 const binDir = path.join(rootDir, 'bin');
@@ -65,7 +66,7 @@ function commandExists(cmd) {
 
 function verifyBinary(binPathOrCmd, name) {
   try {
-    const flag = name === 'yt-dlp' ? '--version' : '-version';
+    const flag = (name === 'yt-dlp' || name === 'bgutil-pot') ? '--version' : '-version';
     const out = execSync(`"${binPathOrCmd}" ${flag}`, { encoding: 'utf-8', timeout: 10000 });
     const firstLine = out.split('\n')[0].trim();
     console.log(`[install-binaries] ${name} verified (${binPathOrCmd}): ${firstLine}`);
@@ -83,10 +84,14 @@ async function main() {
   if (process.platform !== 'linux') {
     const hasYtdlp = commandExists('yt-dlp');
     const hasFfmpeg = commandExists('ffmpeg');
+    const localBgutil = path.join(binDir, 'bgutil-pot.exe');
+    const hasBgutil = commandExists('bgutil-pot') || fs.existsSync(localBgutil);
     console.log(`[install-binaries] System yt-dlp available: ${hasYtdlp}`);
     console.log(`[install-binaries] System FFmpeg available: ${hasFfmpeg}`);
+    console.log(`[install-binaries] bgutil-pot available: ${hasBgutil}`);
     if (hasYtdlp) verifyBinary('yt-dlp', 'yt-dlp');
     if (hasFfmpeg) verifyBinary('ffmpeg', 'ffmpeg');
+    if (hasBgutil) verifyBinary(fs.existsSync(localBgutil) ? localBgutil : 'bgutil-pot', 'bgutil-pot');
     console.log('[install-binaries] Non-Linux environment check completed.');
     return;
   }
@@ -191,6 +196,46 @@ async function main() {
       fs.chmodSync(nodeFfmpegDest, 0o755);
     } catch (copyErr) {
       console.warn(`[install-binaries] Warning: Could not mirror FFmpeg to node_modules/.bin: ${copyErr.message}`);
+    }
+  }
+
+  // ==========================================
+  // 3. bgutil-pot Installation & Verification
+  // ==========================================
+  const bgutilPotDest = path.join(binDir, 'bgutil-pot');
+  const nodeBgutilPotDest = path.join(nodeBinDir, 'bgutil-pot');
+  let bgutilReady = false;
+
+  if (fs.existsSync(bgutilPotDest)) {
+    if (verifyBinary(bgutilPotDest, 'bgutil-pot')) {
+      bgutilReady = true;
+      console.log(`[install-binaries] Existing bgutil-pot binary is valid at ${bgutilPotDest}`);
+    } else {
+      console.warn(`[install-binaries] Existing bgutil-pot at ${bgutilPotDest} is invalid, removing...`);
+      try { fs.unlinkSync(bgutilPotDest); } catch {}
+    }
+  }
+
+  if (!bgutilReady) {
+    console.log('[install-binaries] Downloading bgutil-pot Linux binary...');
+    try {
+      await downloadFile(BGUTIL_POT_URL, bgutilPotDest);
+      fs.chmodSync(bgutilPotDest, 0o755);
+      if (verifyBinary(bgutilPotDest, 'bgutil-pot')) {
+        bgutilReady = true;
+        console.log(`[install-binaries] Successfully installed and verified bgutil-pot at ${bgutilPotDest}`);
+      }
+    } catch (err) {
+      console.warn(`[install-binaries] Warning: Could not install bgutil-pot: ${err.message}`);
+    }
+  }
+
+  if (bgutilReady && fs.existsSync(bgutilPotDest)) {
+    try {
+      fs.copyFileSync(bgutilPotDest, nodeBgutilPotDest);
+      fs.chmodSync(nodeBgutilPotDest, 0o755);
+    } catch (copyErr) {
+      console.warn(`[install-binaries] Warning: Could not mirror bgutil-pot to node_modules/.bin: ${copyErr.message}`);
     }
   }
 

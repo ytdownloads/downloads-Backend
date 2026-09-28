@@ -5,6 +5,7 @@ import path from 'node:path';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { potProviderService } from './potProvider.service.js';
 import {
   ValidatedYouTubeUrl,
   MediaInfoResult,
@@ -139,9 +140,10 @@ export function inspectCookieStatus(): CookieStatus {
 }
 
 export function isBotBlockRecent(): boolean {
-  // If valid cookies are active, server is not blocked by past unauthenticated challenges
+  // If valid cookies or POT provider are active, server is not blocked by past unauthenticated challenges
   const cookieStatus = inspectCookieStatus();
-  if (cookieStatus.activePath) {
+  const potStatus = potProviderService.getStatus();
+  if (cookieStatus.activePath || potStatus.active) {
     return false;
   }
   return Date.now() - lastBotBlockTimestamp < 3 * 60 * 1000;
@@ -173,18 +175,25 @@ export const DEFAULT_PLAYER_CLIENT = 'android_vr,web_embedded';
 
 export function getExtractorClientConfigString(): string {
   const customClient = env.YOUTUBE_PLAYER_CLIENT || process.env.YOUTUBE_PLAYER_CLIENT;
-  const client = customClient && customClient.trim() ? customClient.trim() : DEFAULT_PLAYER_CLIENT;
-  return `youtube:player_client=${client}`;
+  if (customClient && customClient.trim()) {
+    return `youtube:player_client=${customClient.trim()}`;
+  }
+  return potProviderService.getStatus().active
+    ? 'youtube:player_client=mweb,web,android_vr (POT enabled)'
+    : `youtube:player_client=${DEFAULT_PLAYER_CLIENT}`;
 }
 
 /**
  * Returns appropriate extractor player client arguments depending on environment.
- * The android_vr,web_embedded clients do not require a Proof-of-Origin (PO) token
- * and are not blocked by YouTube bot-detection challenges on cloud/datacenter IPs.
+ * When the POT provider is active, mweb,web,android_vr clients are used with genuine PO tokens.
+ * Otherwise, the android_vr,web_embedded clients are used as fallback.
  */
 export function getPlayerClientArgs(): string[] {
   const customClient = env.YOUTUBE_PLAYER_CLIENT || process.env.YOUTUBE_PLAYER_CLIENT;
-  const client = customClient && customClient.trim() ? customClient.trim() : DEFAULT_PLAYER_CLIENT;
+  let client = customClient && customClient.trim() ? customClient.trim() : null;
+  if (!client) {
+    client = potProviderService.getStatus().active ? 'mweb,web,android_vr' : DEFAULT_PLAYER_CLIENT;
+  }
   const poToken = env.YOUTUBE_PO_TOKEN || env.PO_TOKEN || process.env.YOUTUBE_PO_TOKEN || process.env.PO_TOKEN;
 
   const args = ['--extractor-args', `youtube:player_client=${client}`];
@@ -658,13 +667,69 @@ export class YtDlpService {
 
     try {
       const cookieStatus = inspectCookieStatus();
+      const potArgs = potProviderService.getYtDlpArgs();
+      const isPotActive = potProviderService.getStatus().active;
 
       // Ordered extraction strategies:
-      // 1. Android VR + Web Embedded (Fastest on cloud/datacenter IPs, exempt from PO token bot challenges)
-      // 2. Web Embedded fallback (exempt from PO token bot challenges, covers videos excluded by android_vr)
-      // 3. Authenticated web/mweb with Render secret cookies (if cookies configured, for age-restricted/authenticated content)
-      // 4. TV embedded client fallback (alternative mobile/smart TV endpoint)
-      const strategies: Array<{ name: string; args: string[] }> = [
+      // 1. Dynamic POT Provider with mweb,web (authenticates with fresh dynamic PO tokens minted on server IP)
+      // 2. Dynamic POT Provider with web,android_vr
+      // 3. Android VR Direct (fallback for when POT provider is not active or video client needs alternative)
+      // 4. Web Embedded fallback
+      // 5. Authenticated web/mweb with Render secret cookies (if cookies configured)
+      // 6. TV embedded client fallback
+      const strategies: Array<{ name: string; args: string[] }> = [];
+
+      if (isPotActive) {
+        strategies.push({
+          name: 'pot_mweb_web',
+          args: [
+            '--dump-single-json',
+            ...(validated.type === 'playlist'
+              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+              : ['--no-playlist']),
+            '--no-warnings',
+            '--socket-timeout',
+            '15',
+            '--retries',
+            '3',
+            ...potArgs,
+            '--extractor-args',
+            'youtube:player_client=mweb,web',
+            '--skip-download',
+            '--js-runtimes',
+            `node:${process.execPath}`,
+            ...getUserAgentArgs(),
+            ...getCookieArgs(),
+            validated.normalizedUrl,
+          ],
+        });
+
+        strategies.push({
+          name: 'pot_web_android_vr',
+          args: [
+            '--dump-single-json',
+            ...(validated.type === 'playlist'
+              ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+              : ['--no-playlist']),
+            '--no-warnings',
+            '--socket-timeout',
+            '15',
+            '--retries',
+            '3',
+            ...potArgs,
+            '--extractor-args',
+            'youtube:player_client=web,android_vr',
+            '--skip-download',
+            '--js-runtimes',
+            `node:${process.execPath}`,
+            ...getUserAgentArgs(),
+            ...getCookieArgs(),
+            validated.normalizedUrl,
+          ],
+        });
+      }
+
+      strategies.push(
         {
           name: 'android_vr_direct',
           args: [
@@ -705,8 +770,8 @@ export class YtDlpService {
             ...getUserAgentArgs(),
             validated.normalizedUrl,
           ],
-        },
-      ];
+        }
+      );
 
       if (cookieStatus.activePath) {
         strategies.push({
