@@ -36,6 +36,47 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
     return;
   }
 
+  if (_req.query.probe === 'pot') {
+    try {
+      const potBin = potProviderService.findBinaryPath() || 'bgutil-pot';
+      const pluginsDir = potProviderService.getPluginsDir() || 'none';
+      let cliToken = '';
+      let cliError = '';
+      try {
+        const { stdout } = await execAsync(`"${potBin}" -c jNQXAC9IVRw`, { timeout: 10000 });
+        cliToken = stdout.trim();
+      } catch (e: any) {
+        cliError = e.message;
+      }
+
+      let ytdlpDebug = '';
+      try {
+        const { stdout, stderr } = await execAsync(
+          `yt-dlp --plugin-dirs "${pluginsDir}" -v --simulate "https://www.youtube.com/watch?v=jNQXAC9IVRw"`,
+          { timeout: 15000 }
+        );
+        ytdlpDebug = (stderr || stdout).slice(0, 3000);
+      } catch (e: any) {
+        ytdlpDebug = (e.stderr || e.stdout || e.message).slice(0, 3000);
+      }
+
+      const pingResult = await potProviderService.ping();
+
+      res.json({
+        potBin,
+        pluginsDir,
+        pingResult,
+        cliToken,
+        cliError,
+        ytdlpDebug,
+      });
+      return;
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+      return;
+    }
+  }
+
 
   // 1. Verify yt-dlp
   if (!cachedYtdlpVersion || cachedYtdlpVersion.startsWith('error')) {
