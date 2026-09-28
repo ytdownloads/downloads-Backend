@@ -140,12 +140,7 @@ export function inspectCookieStatus(): CookieStatus {
 }
 
 export function isBotBlockRecent(): boolean {
-  // If valid cookies or POT provider are active, server is not blocked by past unauthenticated challenges
-  const cookieStatus = inspectCookieStatus();
-  const potStatus = potProviderService.getStatus();
-  if (cookieStatus.activePath || potStatus.active) {
-    return false;
-  }
+  if (lastBotBlockTimestamp <= 0) return false;
   return Date.now() - lastBotBlockTimestamp < 3 * 60 * 1000;
 }
 
@@ -190,10 +185,7 @@ export function getExtractorClientConfigString(): string {
  */
 export function getPlayerClientArgs(): string[] {
   const customClient = env.YOUTUBE_PLAYER_CLIENT || process.env.YOUTUBE_PLAYER_CLIENT;
-  let client = customClient && customClient.trim() ? customClient.trim() : null;
-  if (!client) {
-    client = potProviderService.getStatus().active ? 'mweb,web,android_vr' : DEFAULT_PLAYER_CLIENT;
-  }
+  const client = customClient && customClient.trim() ? customClient.trim() : DEFAULT_PLAYER_CLIENT;
   const poToken = env.YOUTUBE_PO_TOKEN || env.PO_TOKEN || process.env.YOUTUBE_PO_TOKEN || process.env.PO_TOKEN;
 
   const args = ['--extractor-args', `youtube:player_client=${client}`];
@@ -704,7 +696,7 @@ export class YtDlpService {
         });
 
         strategies.push({
-          name: 'pot_web_android_vr',
+          name: 'pot_android_vr',
           args: [
             '--dump-single-json',
             ...(validated.type === 'playlist'
@@ -717,7 +709,7 @@ export class YtDlpService {
             '3',
             ...potArgs,
             '--extractor-args',
-            'youtube:player_client=web,android_vr',
+            'youtube:player_client=android_vr,web_embedded',
             '--skip-download',
             '--js-runtimes',
             `node:${process.execPath}`,
