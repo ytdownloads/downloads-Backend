@@ -52,8 +52,8 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
       let ytdlpDebug = '';
       try {
         const { stdout, stderr } = await execAsync(
-          `yt-dlp --plugin-dirs "${pluginsDir}" -v --simulate "https://www.youtube.com/watch?v=jNQXAC9IVRw"`,
-          { timeout: 15000 }
+          `yt-dlp --plugin-dirs "${pluginsDir}" --js-runtimes "node:${process.execPath}" --extractor-args "youtube:player_client=mweb,web" -v --simulate "https://www.youtube.com/watch?v=jNQXAC9IVRw"`,
+          { timeout: 20000 }
         );
         ytdlpDebug = (stderr || stdout).slice(0, 3000);
       } catch (e: any) {

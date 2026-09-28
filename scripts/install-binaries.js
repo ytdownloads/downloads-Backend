@@ -16,6 +16,7 @@ const FFMPEG_VERSION = '6.1';
 const YTDLP_URL = `https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp`;
 const FFMPEG_URL = `https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v${FFMPEG_VERSION}/ffmpeg-${FFMPEG_VERSION}-linux-64.zip`;
 const BGUTIL_POT_URL = 'https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest/download/bgutil-pot-linux-x86_64';
+const DENO_URL = 'https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip';
 
 const rootDir = process.cwd();
 const binDir = path.join(rootDir, 'bin');
@@ -66,7 +67,7 @@ function commandExists(cmd) {
 
 function verifyBinary(binPathOrCmd, name) {
   try {
-    const flag = (name === 'yt-dlp' || name === 'bgutil-pot') ? '--version' : '-version';
+    const flag = (name === 'yt-dlp' || name === 'bgutil-pot' || name === 'deno') ? '--version' : '-version';
     const out = execSync(`"${binPathOrCmd}" ${flag}`, { encoding: 'utf-8', timeout: 10000 });
     const firstLine = out.split('\n')[0].trim();
     console.log(`[install-binaries] ${name} verified (${binPathOrCmd}): ${firstLine}`);
@@ -86,12 +87,15 @@ async function main() {
     const hasFfmpeg = commandExists('ffmpeg');
     const localBgutil = path.join(binDir, 'bgutil-pot.exe');
     const hasBgutil = commandExists('bgutil-pot') || fs.existsSync(localBgutil);
+    const hasDeno = commandExists('deno');
     console.log(`[install-binaries] System yt-dlp available: ${hasYtdlp}`);
     console.log(`[install-binaries] System FFmpeg available: ${hasFfmpeg}`);
     console.log(`[install-binaries] bgutil-pot available: ${hasBgutil}`);
+    console.log(`[install-binaries] Deno available: ${hasDeno}`);
     if (hasYtdlp) verifyBinary('yt-dlp', 'yt-dlp');
     if (hasFfmpeg) verifyBinary('ffmpeg', 'ffmpeg');
     if (hasBgutil) verifyBinary(fs.existsSync(localBgutil) ? localBgutil : 'bgutil-pot', 'bgutil-pot');
+    if (hasDeno) verifyBinary('deno', 'deno');
     console.log('[install-binaries] Non-Linux environment check completed.');
     return;
   }
@@ -236,6 +240,63 @@ async function main() {
       fs.chmodSync(nodeBgutilPotDest, 0o755);
     } catch (copyErr) {
       console.warn(`[install-binaries] Warning: Could not mirror bgutil-pot to node_modules/.bin: ${copyErr.message}`);
+    }
+  }
+
+  // ==========================================
+  // 4. Deno JavaScript Runtime Installation & Verification
+  // ==========================================
+  const denoDest = path.join(binDir, 'deno');
+  const nodeDenoDest = path.join(nodeBinDir, 'deno');
+  let denoReady = false;
+
+  if (commandExists('deno')) {
+    if (verifyBinary('deno', 'deno')) {
+      denoReady = true;
+      console.log('[install-binaries] System Deno is verified and functional.');
+    }
+  }
+
+  if (!denoReady && fs.existsSync(denoDest)) {
+    if (verifyBinary(denoDest, 'deno')) {
+      denoReady = true;
+      console.log(`[install-binaries] Existing Deno binary is valid at ${denoDest}`);
+    } else {
+      console.warn(`[install-binaries] Existing Deno at ${denoDest} is invalid, removing...`);
+      try { fs.unlinkSync(denoDest); } catch {}
+    }
+  }
+
+  if (!denoReady) {
+    console.log('[install-binaries] Downloading static Deno runtime for Linux...');
+    const denoZip = path.join(binDir, 'deno.zip');
+    try {
+      await downloadFile(DENO_URL, denoZip);
+      try {
+        execSync(`unzip -o "${denoZip}" -d "${binDir}"`, { stdio: 'ignore' });
+      } catch {
+        execSync(`tar -xf "${denoZip}" -C "${binDir}"`, { stdio: 'ignore' });
+      }
+      try { fs.unlinkSync(denoZip); } catch {}
+
+      if (fs.existsSync(denoDest)) {
+        fs.chmodSync(denoDest, 0o755);
+        if (verifyBinary(denoDest, 'deno')) {
+          denoReady = true;
+          console.log(`[install-binaries] Successfully installed and verified Deno at ${denoDest}`);
+        }
+      }
+    } catch (err) {
+      console.warn('[install-binaries] Warning: Could not install Deno:', err.message);
+    }
+  }
+
+  if (denoReady && fs.existsSync(denoDest)) {
+    try {
+      fs.copyFileSync(denoDest, nodeDenoDest);
+      fs.chmodSync(nodeDenoDest, 0o755);
+    } catch (copyErr) {
+      console.warn(`[install-binaries] Warning: Could not mirror Deno to node_modules/.bin: ${copyErr.message}`);
     }
   }
 
