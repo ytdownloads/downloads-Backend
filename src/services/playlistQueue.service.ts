@@ -8,7 +8,7 @@ import { logger } from '../utils/logger.js';
 import { BatchJob, batchJobRegistry } from './batchJobRegistry.service.js';
 import { BatchItemData } from '../types/download.types.js';
 import { sanitizeCleanFilename } from '../utils/filename.js';
-import { getCookieArgs, getUserAgentArgs, getPlayerClientArgs } from './ytdlp.service.js';
+import { getCookieArgs, getUserAgentArgs, getPlayerClientArgs, metadataCache } from './ytdlp.service.js';
 import { potProviderService } from './potProvider.service.js';
 
 const VALID_VIDEO_FORMAT_REGEX = /^video-(\d{3,4})p$/;
@@ -109,11 +109,9 @@ export class PlaylistQueueService {
         '--no-warnings',
         '--no-mtime',
         '--buffer-size',
-        '1024k',
-        '--http-chunk-size',
-        '10M',
+        '2048k',
         '--concurrent-fragments',
-        '4',
+        '8',
         '--socket-timeout',
         '15',
         '--retries',

@@ -175,20 +175,23 @@ export function getExtractorClientConfigString(): string {
   }
   return potProviderService.getStatus().active
     ? 'youtube:player_client=mweb,web,android_vr (POT enabled)'
-    : `youtube:player_client=${DEFAULT_PLAYER_CLIENT}`;
+    : 'youtube:player_client=default';
 }
 
 /**
  * Returns appropriate extractor player client arguments depending on environment.
- * When the POT provider is active, mweb,web,android_vr clients are used with genuine PO tokens.
- * Otherwise, the android_vr,web_embedded clients are used as fallback.
+ * If YOUTUBE_PLAYER_CLIENT is explicitly set via environment, it is passed to yt-dlp.
+ * Otherwise, no client restriction is forced so yt-dlp can use all supported clients
+ * (visionos, ios, android, web, mweb) and avoid 403 Forbidden errors on media streams.
  */
 export function getPlayerClientArgs(): string[] {
   const customClient = env.YOUTUBE_PLAYER_CLIENT || process.env.YOUTUBE_PLAYER_CLIENT;
-  const client = customClient && customClient.trim() ? customClient.trim() : DEFAULT_PLAYER_CLIENT;
   const poToken = env.YOUTUBE_PO_TOKEN || env.PO_TOKEN || process.env.YOUTUBE_PO_TOKEN || process.env.PO_TOKEN;
 
-  const args = ['--extractor-args', `youtube:player_client=${client}`];
+  const args: string[] = [];
+  if (customClient && customClient.trim()) {
+    args.push('--extractor-args', `youtube:player_client=${customClient.trim()}`);
+  }
   if (poToken && poToken.trim()) {
     args.push('--extractor-args', `youtube:po_token=${poToken.trim()}`);
   }
@@ -397,6 +400,7 @@ function normalizeFormats(rawFormats?: RawFormat[]): NormalizedFormat[] {
 
 interface CacheEntry {
   data: MediaInfoResult;
+  rawJson?: string;
   expiresAt: number;
 }
 
@@ -416,13 +420,24 @@ class MetadataCache {
     return entry.data;
   }
 
-  public set(key: string, data: MediaInfoResult): void {
+  public getRawJson(key: string): string | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.rawJson || null;
+  }
+
+  public set(key: string, data: MediaInfoResult, rawJson?: string): void {
     if (this.cache.size >= MAX_METADATA_CACHE_SIZE) {
       const oldestKey = this.cache.keys().next().value;
       if (oldestKey) this.cache.delete(oldestKey);
     }
     this.cache.set(key, {
       data,
+      rawJson,
       expiresAt: Date.now() + METADATA_CACHE_TTL_MS,
     });
   }
@@ -673,9 +688,9 @@ export class YtDlpService {
           : ['--no-playlist']),
         '--no-warnings',
         '--socket-timeout',
-        '10',
+        '20',
         '--retries',
-        '1',
+        '2',
         ...(isPotActive ? potArgs : []),
         '--extractor-args',
         'youtube:player_client=mweb,web,android_vr',
@@ -695,9 +710,9 @@ export class YtDlpService {
           : ['--no-playlist']),
         '--no-warnings',
         '--socket-timeout',
-        '10',
+        '20',
         '--retries',
-        '1',
+        '2',
         '--extractor-args',
         'youtube:player_client=tv_embedded,web_embedded',
         '--skip-download',
@@ -723,8 +738,12 @@ export class YtDlpService {
         }
 
         clearBotBlock();
-        metadataCache.set(cacheKey, result);
-        metadataCache.set(`${validated.type}:${validated.id}`, result);
+        metadataCache.set(cacheKey, result, rawJson);
+        metadataCache.set(`${validated.type}:${validated.id}`, result, rawJson);
+        metadataCache.set(validated.normalizedUrl, result, rawJson);
+        if (validated.id) {
+          metadataCache.set(validated.id, result, rawJson);
+        }
         return result;
       } catch (err: any) {
         lastError = err;
@@ -769,8 +788,12 @@ export class YtDlpService {
         }
 
         clearBotBlock();
-        metadataCache.set(cacheKey, result);
-        metadataCache.set(`${validated.type}:${validated.id}`, result);
+        metadataCache.set(cacheKey, result, rawJson);
+        metadataCache.set(`${validated.type}:${validated.id}`, result, rawJson);
+        metadataCache.set(validated.normalizedUrl, result, rawJson);
+        if (validated.id) {
+          metadataCache.set(validated.id, result, rawJson);
+        }
         return result;
       } catch (fallbackErr: any) {
         lastError = fallbackErr;
