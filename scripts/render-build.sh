@@ -18,15 +18,21 @@ mkdir -p node_modules/.bin
 YTDLP_VERSION="2026.10.26"
 FFMPEG_VERSION="6.1"
 
-# 4. Install standalone yt-dlp binary for Linux x86_64
-if ! command -v yt-dlp &> /dev/null; then
-  echo "==> yt-dlp not found in system PATH. Fetching pinned Linux binary v${YTDLP_VERSION}..."
+# 4. Install standalone yt-dlp binary for Linux x86_64 (enforce exact pinned version)
+CURRENT_BIN_VER=""
+if [ -f bin/yt-dlp ]; then
+  CURRENT_BIN_VER="$(./bin/yt-dlp --version 2>/dev/null || true)"
+fi
+
+if [ "$CURRENT_BIN_VER" != "$YTDLP_VERSION" ]; then
+  echo "==> yt-dlp needs update (current: '${CURRENT_BIN_VER}', target: '${YTDLP_VERSION}'). Fetching pinned Linux binary v${YTDLP_VERSION}..."
+  rm -f bin/yt-dlp node_modules/.bin/yt-dlp
   curl -sSL "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp" -o bin/yt-dlp
   chmod a+rx bin/yt-dlp
   cp -f bin/yt-dlp node_modules/.bin/yt-dlp || true
-  echo "==> Successfully installed standalone yt-dlp to bin/yt-dlp and node_modules/.bin/yt-dlp"
+  echo "==> Successfully installed standalone yt-dlp v${YTDLP_VERSION} to bin/yt-dlp and node_modules/.bin/yt-dlp"
 else
-  echo "==> System yt-dlp detected: $(command -v yt-dlp)"
+  echo "==> bin/yt-dlp is already at target version: ${CURRENT_BIN_VER}"
 fi
 
 # 5. Install standalone static FFmpeg binary for Linux x86_64

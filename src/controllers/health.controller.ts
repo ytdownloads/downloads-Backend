@@ -36,6 +36,12 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
     return;
   }
 
+  // Allow manual cache refresh for dependency probes
+  if (_req.query.refresh === '1' || _req.query.refresh === 'true') {
+    cachedYtdlpVersion = '';
+    cachedFfmpegVersion = '';
+  }
+
 
 
 
@@ -111,6 +117,8 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
     status: 'ok',
     ready: true,
     version: '1.0.0',
+    commit: process.env.RENDER_GIT_COMMIT || 'development',
+    renderInstance: process.env.RENDER_INSTANCE_ID || 'local',
     cookies: safeCookieInfo,
     potProvider: {
       active: potStatus.active,

@@ -65,6 +65,16 @@ function commandExists(cmd) {
   }
 }
 
+function getBinaryVersion(binPathOrCmd, name) {
+  try {
+    const flag = (name === 'yt-dlp' || name === 'bgutil-pot' || name === 'deno') ? '--version' : '-version';
+    const out = execSync(`"${binPathOrCmd}" ${flag}`, { encoding: 'utf-8', timeout: 10000 });
+    return out.split('\n')[0].trim();
+  } catch {
+    return null;
+  }
+}
+
 function verifyBinary(binPathOrCmd, name) {
   try {
     const flag = (name === 'yt-dlp' || name === 'bgutil-pot' || name === 'deno') ? '--version' : '-version';
@@ -113,14 +123,16 @@ async function main() {
   // ==========================================
   let ytdlpReady = false;
 
-  // Check if ./bin/yt-dlp already exists and works
+  // Check if ./bin/yt-dlp already exists and matches target version
   if (fs.existsSync(ytdlpDest)) {
-    if (verifyBinary(ytdlpDest, 'yt-dlp')) {
+    const existingVer = getBinaryVersion(ytdlpDest, 'yt-dlp');
+    if (existingVer === YTDLP_VERSION) {
       ytdlpReady = true;
-      console.log(`[install-binaries] Existing yt-dlp binary is valid at ${ytdlpDest}`);
+      console.log(`[install-binaries] Existing yt-dlp binary is current at ${ytdlpDest} (v${existingVer})`);
     } else {
-      console.warn(`[install-binaries] Existing yt-dlp at ${ytdlpDest} is invalid/corrupt, redownloading...`);
+      console.log(`[install-binaries] Existing yt-dlp version (${existingVer}) differs from target (${YTDLP_VERSION}), redownloading...`);
       try { fs.unlinkSync(ytdlpDest); } catch {}
+      try { fs.unlinkSync(nodeYtdlpDest); } catch {}
     }
   }
 
