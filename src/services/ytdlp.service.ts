@@ -809,6 +809,7 @@ export class YtDlpService {
       // Common base arguments for yt-dlp metadata extraction
       const commonArgs = [
         '--dump-single-json',
+        '-4', // Force IPv4 to bypass cloud provider blocked IPv6 ranges
         ...(validated.type === 'playlist'
           ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS)]
           : ['--no-playlist']),
@@ -818,8 +819,6 @@ export class YtDlpService {
         '--retries',
         '2',
         '--skip-download',
-        '--js-runtimes',
-        `node:${process.execPath}`,
         ...getUserAgentArgs(),
       ];
 
@@ -863,6 +862,18 @@ export class YtDlpService {
           ...commonArgs,
           '--extractor-args',
           'youtube:player_client=visionos,android_vr,android',
+          '--',
+          validated.normalizedUrl,
+        ],
+      });
+
+      // Attempt 4: Direct android client fallback
+      attempts.push({
+        name: 'Fallback (Android InnerTube Client)',
+        args: [
+          ...commonArgs,
+          '--extractor-args',
+          'youtube:player_client=android',
           '--',
           validated.normalizedUrl,
         ],

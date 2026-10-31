@@ -104,6 +104,7 @@ export class PlaylistQueueService {
 
       const args: string[] = [
         '--newline',
+        '-4', // Force IPv4 routing
         '--no-playlist',
         '--windows-filenames',
         '--no-warnings',
@@ -120,8 +121,6 @@ export class PlaylistQueueService {
         '3',
         ...potProviderService.getYtDlpArgs(),
         ...getPlayerClientArgs(),
-        '--js-runtimes',
-        `node:${process.execPath}`,
         ...getUserAgentArgs(),
         ...getCookieArgs(),
         '--paths',

@@ -75,6 +75,7 @@ export class DownloadService {
     // 5. Construct safe yt-dlp arguments array (NO shell execution)
     const args: string[] = [
       '--newline',
+      '-4', // Force IPv4 routing
       '--no-playlist',
       '--windows-filenames',
       '--no-warnings',
@@ -91,8 +92,6 @@ export class DownloadService {
       '3',
       ...potProviderService.getYtDlpArgs(),
       ...getPlayerClientArgs(),
-      '--js-runtimes',
-      `node:${process.execPath}`,
       ...getUserAgentArgs(),
       ...getCookieArgs(),
       '--paths',

@@ -10,6 +10,7 @@ let cachedYtdlpVersion = '';
 let cachedYtdlpPath = '';
 let cachedFfmpegVersion = '';
 let cachedFfmpegPath = '';
+let cachedDenoVersion = '';
 
 export async function getHealthCheck(_req: Request, res: Response): Promise<void> {
   // Allow safe simulation of states for verification
@@ -40,6 +41,7 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
   if (_req.query.refresh === '1' || _req.query.refresh === 'true') {
     cachedYtdlpVersion = '';
     cachedFfmpegVersion = '';
+    cachedDenoVersion = '';
   }
 
 
@@ -68,6 +70,16 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
       cachedFfmpegPath = fpOut.trim();
     } catch (e) {
       cachedFfmpegVersion = 'error: ' + String(e);
+    }
+  }
+
+  // 3. Verify Deno runtime (for BotGuard / JS challenges)
+  if (!cachedDenoVersion || cachedDenoVersion.startsWith('error')) {
+    try {
+      const { stdout: dOut } = await execAsync('deno --version', { timeout: 10000 });
+      cachedDenoVersion = dOut.split('\n')[0].trim();
+    } catch (e) {
+      cachedDenoVersion = 'none';
     }
   }
 
@@ -134,10 +146,14 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
       recentBlock: isBotBlocked,
       status: isBotBlocked ? 'degraded_for_some_videos' : 'normal',
     },
+    deno: {
+      version: cachedDenoVersion,
+      available: cachedDenoVersion !== 'none' && !cachedDenoVersion.startsWith('error'),
+    },
     ytdlp: {
       version: cachedYtdlpVersion,
       available: ytdlpHealthy,
-      jsRuntime: 'node',
+      jsRuntime: cachedDenoVersion !== 'none' ? 'deno' : 'node',
       ejsAvailable: true,
       extractorConfiguration: getExtractorClientConfigString(),
     },
