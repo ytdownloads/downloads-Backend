@@ -30,26 +30,35 @@ function ensureDir(dir) {
 
 function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(destPath);
     https.get(url, { headers: { 'User-Agent': 'Node-Installer' } }, (res) => {
       // Follow redirects
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        file.close();
-        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+        res.resume();
         return resolve(downloadFile(res.headers.location, destPath));
       }
       if (res.statusCode !== 200) {
-        file.close();
-        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+        res.resume();
         return reject(new Error(`Download failed with status ${res.statusCode} for ${url}`));
       }
+      const file = fs.createWriteStream(destPath);
       res.pipe(file);
       file.on('finish', () => {
         file.close(resolve);
       });
+      file.on('error', (err) => {
+        file.close(() => {
+          try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+          reject(err);
+        });
+      });
+      res.on('error', (err) => {
+        file.close(() => {
+          try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
+          reject(err);
+        });
+      });
     }).on('error', (err) => {
-      file.close();
-      if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+      try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
       reject(err);
     });
   });
@@ -66,23 +75,63 @@ function commandExists(cmd) {
 }
 
 function getBinaryVersion(binPathOrCmd, name) {
+  const flag = (name === 'yt-dlp' || name === 'bgutil-pot' || name === 'deno') ? '--version' : '-version';
   try {
-    const flag = (name === 'yt-dlp' || name === 'bgutil-pot' || name === 'deno') ? '--version' : '-version';
-    const out = execSync(`"${binPathOrCmd}" ${flag}`, { encoding: 'utf-8', timeout: 10000 });
+    const out = execSync(`"${binPathOrCmd}" ${flag}`, {
+      encoding: 'utf-8',
+      timeout: 60000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
     return out.split('\n')[0].trim();
   } catch {
+    // If direct execution of yt-dlp fails on Linux, try explicit python3 fallback
+    if (name === 'yt-dlp' && process.platform === 'linux') {
+      try {
+        const out = execSync(`python3 "${binPathOrCmd}" ${flag}`, {
+          encoding: 'utf-8',
+          timeout: 60000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true,
+        });
+        return out.split('\n')[0].trim();
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
 }
 
 function verifyBinary(binPathOrCmd, name) {
+  const flag = (name === 'yt-dlp' || name === 'bgutil-pot' || name === 'deno') ? '--version' : '-version';
   try {
-    const flag = (name === 'yt-dlp' || name === 'bgutil-pot' || name === 'deno') ? '--version' : '-version';
-    const out = execSync(`"${binPathOrCmd}" ${flag}`, { encoding: 'utf-8', timeout: 10000 });
+    const out = execSync(`"${binPathOrCmd}" ${flag}`, {
+      encoding: 'utf-8',
+      timeout: 60000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
     const firstLine = out.split('\n')[0].trim();
     console.log(`[install-binaries] ${name} verified (${binPathOrCmd}): ${firstLine}`);
     return true;
   } catch (e) {
+    if (name === 'yt-dlp' && process.platform === 'linux') {
+      try {
+        const out = execSync(`python3 "${binPathOrCmd}" ${flag}`, {
+          encoding: 'utf-8',
+          timeout: 60000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true,
+        });
+        const firstLine = out.split('\n')[0].trim();
+        console.log(`[install-binaries] ${name} verified via python3 (${binPathOrCmd}): ${firstLine}`);
+        return true;
+      } catch (pyErr) {
+        console.warn(`[install-binaries] ${name} verification failed at ${binPathOrCmd}: ${e.message} (python3 fallback: ${pyErr.message})`);
+        return false;
+      }
+    }
     console.warn(`[install-binaries] ${name} verification failed at ${binPathOrCmd}: ${e.message}`);
     return false;
   }

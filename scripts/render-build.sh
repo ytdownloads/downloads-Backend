@@ -10,9 +10,10 @@ echo "==> Starting build process for YTdownloader..."
 echo "==> Installing Node.js dependencies..."
 npm install
 
-# 2. Ensure project bin and node_modules/.bin directories exist
+# 2. Ensure project bin and node_modules/.bin directories exist and prepend to PATH
 mkdir -p bin
 mkdir -p node_modules/.bin
+export PATH="$PWD/bin:$PWD/node_modules/.bin:$PATH"
 
 # 3. Pinned reproducible versions
 YTDLP_VERSION="2026.10.26"
@@ -21,7 +22,7 @@ FFMPEG_VERSION="6.1"
 # 4. Install standalone yt-dlp binary for Linux x86_64 (enforce exact pinned version)
 CURRENT_BIN_VER=""
 if [ -f bin/yt-dlp ]; then
-  CURRENT_BIN_VER="$(./bin/yt-dlp --version 2>/dev/null || true)"
+  CURRENT_BIN_VER="$(bin/yt-dlp --version 2>/dev/null || python3 bin/yt-dlp --version 2>/dev/null || true)"
 fi
 
 if [ "$CURRENT_BIN_VER" != "$YTDLP_VERSION" ]; then
@@ -50,8 +51,7 @@ else
   echo "==> System ffmpeg detected: $(command -v ffmpeg)"
 fi
 
-# 6. Verify environment PATH
-export PATH="$PWD/bin:$PWD/node_modules/.bin:$PATH"
+# 6. Verify media binaries
 echo "==> Verifying media binaries..."
 if command -v yt-dlp &> /dev/null; then
   echo "==> yt-dlp version: $(yt-dlp --version)"
