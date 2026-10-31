@@ -11,6 +11,7 @@ const infoRequestSchema = z.object({
   url: z.string({
     required_error: 'URL is required.',
   }).trim().min(1, 'URL cannot be empty.'),
+  mode: z.enum(['video', 'playlist']).optional(),
 });
 
 export async function getMediaInfo(
@@ -25,10 +26,10 @@ export async function getMediaInfo(
       throw new AppError('INVALID_REQUEST', issue, 400);
     }
 
-    const { url } = parseResult.data;
+    const { url, mode } = parseResult.data;
 
     // 1. Backend URL validation and single/playlist classification
-    const validated = validateYouTubeUrl(url);
+    const validated = validateYouTubeUrl(url, { mode });
 
     // 2. Safe yt-dlp metadata extraction without downloading
     let metadata;

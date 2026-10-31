@@ -49,7 +49,14 @@ function cleanVideoId(rawId?: string | null, listId?: string | null): string {
   return id;
 }
 
-export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
+export interface UrlValidationOptions {
+  mode?: 'video' | 'playlist';
+}
+
+export function validateYouTubeUrl(
+  inputUrl: string,
+  options?: UrlValidationOptions
+): ValidatedYouTubeUrl {
   if (!inputUrl || typeof inputUrl !== 'string') {
     throw new AppError('INVALID_URL', 'Please enter a valid YouTube URL.', 400);
   }
@@ -68,7 +75,7 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
     throw new AppError('INVALID_URL', 'Only HTTP and HTTPS YouTube URLs are supported.', 400);
   }
 
-  // Enforce exact YouTube hostnames (no subdomains like evil.youtube.com.attacker.com)
+  // Enforce supported YouTube hostnames
   const hostname = parsed.hostname.toLowerCase();
   if (!YOUTUBE_HOSTNAMES.has(hostname)) {
     throw new AppError(
@@ -78,23 +85,34 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
     );
   }
 
-  // Handle youtu.be short links (e.g. https://youtu.be/jNQXAC9IVRw)
+  const requestedMode = options?.mode;
+
+  // 1. Handle youtu.be short links (e.g. https://youtu.be/jNQXAC9IVRw?list=...)
   if (hostname === 'youtu.be') {
     const listId = parsed.searchParams.get('list');
     const isMix = isMixPlaylist(listId);
+    const rawVideoId = parsed.pathname.slice(1).split('/')[0] || '';
+    const videoId = cleanVideoId(rawVideoId, listId);
 
-    if (listId && PLAYLIST_ID_REGEX.test(listId) && !isMix) {
+    // If playlist mode explicitly requested and list parameter is present
+    if (requestedMode === 'playlist' && listId && PLAYLIST_ID_REGEX.test(listId) && !isMix) {
       return {
         type: 'playlist',
         id: listId,
         normalizedUrl: `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`,
+        videoId: videoId && VIDEO_ID_REGEX.test(videoId) ? videoId : undefined,
       };
     }
 
-    const rawVideoId = parsed.pathname.slice(1).split('/')[0] || '';
-    const videoId = cleanVideoId(rawVideoId, listId);
-
     if (!videoId || !VIDEO_ID_REGEX.test(videoId)) {
+      // If no valid video ID but valid playlist ID
+      if (listId && PLAYLIST_ID_REGEX.test(listId) && !isMix) {
+        return {
+          type: 'playlist',
+          id: listId,
+          normalizedUrl: `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`,
+        };
+      }
       throw new AppError('INVALID_URL', 'Invalid YouTube short video ID.', 400);
     }
 
@@ -102,13 +120,13 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
       type: 'video',
       id: videoId,
       normalizedUrl: `https://www.youtube.com/watch?v=${videoId}`,
+      playlistId: listId && PLAYLIST_ID_REGEX.test(listId) && !isMix ? listId : undefined,
     };
   }
 
-  // Handle standard youtube.com domains
   const pathname = parsed.pathname.toLowerCase();
 
-  // Playlist URLs
+  // 2. Playlist URLs (e.g. https://www.youtube.com/playlist?list=PLAYLIST_ID)
   if (pathname === '/playlist') {
     const listId = parsed.searchParams.get('list');
     if (!listId || !PLAYLIST_ID_REGEX.test(listId)) {
@@ -130,22 +148,31 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
     };
   }
 
-  // Watch video URLs
+  // 3. Watch video URLs (e.g. https://www.youtube.com/watch?v=VIDEO_ID or with &list=...)
   if (pathname === '/watch') {
     const listId = parsed.searchParams.get('list');
     const isMix = isMixPlaylist(listId);
+    const rawVideoId = parsed.searchParams.get('v') || '';
+    const videoId = cleanVideoId(rawVideoId, listId);
 
-    // Only treat as playlist if it is a genuine playlist (not a dynamic mix/radio)
-    if (listId && PLAYLIST_ID_REGEX.test(listId) && !isMix) {
+    // If playlist mode was explicitly requested AND a genuine playlist is present
+    if (requestedMode === 'playlist' && listId && PLAYLIST_ID_REGEX.test(listId) && !isMix) {
+      return {
+        type: 'playlist',
+        id: listId,
+        normalizedUrl: `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`,
+        videoId: videoId && VIDEO_ID_REGEX.test(videoId) ? videoId : undefined,
+      };
+    }
+
+    // If watch link has no video ID, but has a playlist parameter
+    if (!videoId && listId && PLAYLIST_ID_REGEX.test(listId) && !isMix) {
       return {
         type: 'playlist',
         id: listId,
         normalizedUrl: `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`,
       };
     }
-
-    const rawVideoId = parsed.searchParams.get('v') || '';
-    const videoId = cleanVideoId(rawVideoId, listId);
 
     if (!videoId || !VIDEO_ID_REGEX.test(videoId)) {
       throw new AppError('INVALID_URL', 'Invalid or missing YouTube video ID.', 400);
@@ -155,11 +182,12 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
       type: 'video',
       id: videoId,
       normalizedUrl: `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`,
+      playlistId: listId && PLAYLIST_ID_REGEX.test(listId) && !isMix ? listId : undefined,
     };
   }
 
-  // Shorts video URLs (e.g. https://www.youtube.com/shorts/VIDEO_ID)
-  if (parsed.pathname.toLowerCase().startsWith('/shorts/')) {
+  // 4. Shorts video URLs (e.g. https://www.youtube.com/shorts/VIDEO_ID)
+  if (pathname.startsWith('/shorts/')) {
     const rawVideoId = parsed.pathname.slice('/shorts/'.length).split('/')[0];
     const videoId = cleanVideoId(rawVideoId);
     if (!videoId || !VIDEO_ID_REGEX.test(videoId)) {
@@ -173,8 +201,8 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
     };
   }
 
-  // Live video URLs (e.g. https://www.youtube.com/live/VIDEO_ID)
-  if (parsed.pathname.toLowerCase().startsWith('/live/')) {
+  // 5. Live video URLs (e.g. https://www.youtube.com/live/VIDEO_ID)
+  if (pathname.startsWith('/live/')) {
     const rawVideoId = parsed.pathname.slice('/live/'.length).split('/')[0];
     const videoId = cleanVideoId(rawVideoId);
     if (!videoId || !VIDEO_ID_REGEX.test(videoId)) {
@@ -188,9 +216,9 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
     };
   }
 
-  // Embed video URLs (e.g. https://www.youtube.com/embed/VIDEO_ID or /v/VIDEO_ID)
-  if (parsed.pathname.toLowerCase().startsWith('/embed/') || parsed.pathname.toLowerCase().startsWith('/v/')) {
-    const prefix = parsed.pathname.toLowerCase().startsWith('/embed/') ? '/embed/' : '/v/';
+  // 6. Embed and /v/ video URLs (e.g. https://www.youtube.com/embed/VIDEO_ID or /v/VIDEO_ID)
+  if (pathname.startsWith('/embed/') || pathname.startsWith('/v/')) {
+    const prefix = pathname.startsWith('/embed/') ? '/embed/' : '/v/';
     const rawVideoId = parsed.pathname.slice(prefix.length).split('/')[0];
     const videoId = cleanVideoId(rawVideoId);
     if (!videoId || !VIDEO_ID_REGEX.test(videoId)) {
@@ -204,10 +232,43 @@ export function validateYouTubeUrl(inputUrl: string): ValidatedYouTubeUrl {
     };
   }
 
-  // Other unsupported YouTube endpoints (channels, user pages, feeds)
+  // 7. Channel and creator URLs (e.g. /@handle, /channel/ID, /c/NAME, /user/NAME)
+  if (
+    pathname.startsWith('/@') ||
+    pathname.startsWith('/channel/') ||
+    pathname.startsWith('/c/') ||
+    pathname.startsWith('/user/')
+  ) {
+    // Extract base channel path (e.g. /@mkbhd, /channel/UCBJycsmduvYEL83R_U4JriQ)
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    let channelPath = '';
+    let channelId = '';
+
+    if (segments[0]?.startsWith('@')) {
+      channelPath = `/${segments[0]}`;
+      channelId = segments[0];
+    } else if (segments.length >= 2 && ['channel', 'c', 'user'].includes(segments[0].toLowerCase())) {
+      channelPath = `/${segments[0]}/${segments[1]}`;
+      channelId = segments[1];
+    } else {
+      channelPath = parsed.pathname;
+      channelId = segments[0] || 'channel';
+    }
+
+    // Normalize to channel's videos tab to fetch the video upload list
+    const normalizedUrl = `https://www.youtube.com${channelPath}/videos`;
+
+    return {
+      type: 'playlist',
+      id: channelId,
+      normalizedUrl,
+    };
+  }
+
+  // Other unsupported endpoints
   throw new AppError(
     'UNSUPPORTED_URL',
-    'Only direct YouTube video, short, and playlist links are supported.',
+    'Only direct YouTube video, short, live stream, playlist, and channel links are supported.',
     400
   );
 }

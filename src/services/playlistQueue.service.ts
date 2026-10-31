@@ -127,7 +127,7 @@ export class PlaylistQueueService {
         '--paths',
         `home:${itemDir}`,
         '--output',
-        '%(title).100B [%(id)s].%(ext)s',
+        '%(title)s [%(id)s].%(ext)s',
         '--progress-template',
         'download:download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.speed)s|%(progress.eta)s',
       ];
@@ -141,6 +141,7 @@ export class PlaylistQueueService {
           'mp3',
           '--audio-quality',
           '0',
+          '--',
           item.url
         );
       } else if (isVideo) {
@@ -151,6 +152,7 @@ export class PlaylistQueueService {
           `bestvideo[height<=${height}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`,
           '--merge-output-format',
           'mp4',
+          '--',
           item.url
         );
       } else {
@@ -160,6 +162,7 @@ export class PlaylistQueueService {
           'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
           '--merge-output-format',
           'mp4',
+          '--',
           item.url
         );
       }
@@ -437,7 +440,23 @@ export class PlaylistQueueService {
       const stat = await fs.stat(filePath);
       const item = batchJob.getItem(itemId);
       const ext = path.extname(chosenFileName);
-      const cleanFileName = sanitizeCleanFilename(item?.title || chosenFileName, ext);
+
+      let resolvedTitle = item?.title;
+      if (
+        !resolvedTitle ||
+        resolvedTitle.startsWith('Video [') ||
+        resolvedTitle === 'Media Download' ||
+        resolvedTitle === 'YouTube Video'
+      ) {
+        const base = path.basename(chosenFileName, ext);
+        const idMatch = base.match(/^(.*?)\s+\[[A-Za-z0-9_-]{11}\]$/);
+        if (idMatch && idMatch[1] && idMatch[1].trim()) {
+          resolvedTitle = idMatch[1].trim();
+          if (item) item.title = resolvedTitle;
+        }
+      }
+
+      const cleanFileName = sanitizeCleanFilename(resolvedTitle || chosenFileName, ext, itemId);
 
       logger.info('Batch item completed', {
         batchJobId: batchJob.batchJobId,
@@ -570,7 +589,7 @@ export class PlaylistQueueService {
           if (!item.filePath) return;
           const ext = path.extname(item.filePath);
           const indexNum = String(index + 1).padStart(2, '0');
-          const cleanItemTitle = sanitizeCleanFilename(item.title || `video_${index + 1}`, ext);
+          const cleanItemTitle = sanitizeCleanFilename(item.title || `video_${index + 1}`, ext, item.id);
           const entryName = `${indexNum} - ${cleanItemTitle}`;
           archive.file(item.filePath, { name: entryName });
         });

@@ -10,6 +10,16 @@ import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
 import { sanitizeCleanFilename, buildContentDispositionHeader } from '../utils/filename.js';
 
+const MIME_MAP: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.opus': 'audio/opus',
+  '.zip': 'application/zip',
+};
+
 const createDownloadSchema = z.object({
   url: z.string({
     required_error: 'URL is required.',
@@ -18,6 +28,7 @@ const createDownloadSchema = z.object({
     required_error: 'formatId is required.',
   }).trim().min(1, 'formatId cannot be empty.'),
   type: z.literal('video').optional(),
+  title: z.string().trim().optional(),
 });
 
 export async function createDownload(
@@ -32,8 +43,8 @@ export async function createDownload(
       throw new AppError('INVALID_REQUEST', issue, 400);
     }
 
-    const { url, formatId } = parseResult.data;
-    const job = await DownloadService.startDownload(url, formatId);
+    const { url, formatId, title } = parseResult.data;
+    const job = await DownloadService.startDownload(url, formatId, title);
 
     sendSuccess(
       res,
@@ -64,60 +75,86 @@ export function getDownloadEvents(
   res: Response,
   next: NextFunction
 ): void {
+  return subscribeDownloadEvents(req, res, next);
+}
+
+export function subscribeDownloadEvents(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
   try {
     const jobId = getValidatedJobId(req);
     const job = jobRegistry.getJob(jobId);
 
     if (!job) {
-      throw new AppError('NOT_FOUND', 'Download job not found.', 404);
+      throw new AppError('NOT_FOUND', 'Download job not found or expired.', 404);
     }
 
-    // Set Server-Sent Events headers
+    // Set headers for SSE stream
     res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders?.();
+    res.flushHeaders();
 
-    // Helper to send SSE message
-    const sendEvent = (event: string, data: unknown) => {
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    };
+    // Send initial status event immediately upon connection
+    const initialPayload = JSON.stringify(job.toData());
+    res.write(`event: status\ndata: ${initialPayload}\n\n`);
 
-    // Send initial status immediately
-    sendEvent('status', job.toData());
+    // Keepalive ping every 15s to prevent proxy/browser SSE disconnect
+    const pingInterval = setInterval(() => {
+      res.write(': ping\n\n');
+    }, 15000);
 
-    // Event listeners
+    // Progress updates listener: always send full job.toData() snapshot so frontend has complete state
     const onProgress = () => {
-      sendEvent('progress', job.toData());
+      res.write(`event: progress\ndata: ${JSON.stringify(job.toData())}\n\n`);
     };
 
+    // Status change listener
+    const onStatus = () => {
+      res.write(`event: status\ndata: ${JSON.stringify(job.toData())}\n\n`);
+    };
+
+    // Completion listener
     const onCompleted = () => {
-      sendEvent('completed', job.toData());
-      setTimeout(() => res.end(), 1000);
+      res.write(`event: completed\ndata: ${JSON.stringify(job.toData())}\n\n`);
+      cleanup();
+      res.end();
     };
 
+    // Error listener
     const onError = () => {
-      sendEvent('error', job.toData());
-      setTimeout(() => res.end(), 1000);
+      res.write(`event: error\ndata: ${JSON.stringify(job.toData())}\n\n`);
+      cleanup();
+      res.end();
     };
 
+    // Cancellation listener
     const onCancelled = () => {
-      sendEvent('cancelled', job.toData());
-      setTimeout(() => res.end(), 1000);
+      res.write(`event: cancelled\ndata: ${JSON.stringify(job.toData())}\n\n`);
+      cleanup();
+      res.end();
+    };
+
+    const cleanup = () => {
+      clearInterval(pingInterval);
+      job.emitter.off('progress', onProgress);
+      job.emitter.off('status', onStatus);
+      job.emitter.off('completed', onCompleted);
+      job.emitter.off('error', onError);
+      job.emitter.off('cancelled', onCancelled);
     };
 
     job.emitter.on('progress', onProgress);
+    job.emitter.on('status', onStatus);
     job.emitter.on('completed', onCompleted);
     job.emitter.on('error', onError);
     job.emitter.on('cancelled', onCancelled);
 
-    // Cleanup on client disconnect
     req.on('close', () => {
-      job.emitter.off('progress', onProgress);
-      job.emitter.off('completed', onCompleted);
-      job.emitter.off('error', onError);
-      job.emitter.off('cancelled', onCancelled);
+      cleanup();
     });
   } catch (error) {
     next(error);
@@ -170,7 +207,7 @@ export function getDownloadFile(
     }
 
     const ext = path.extname(resolvedPath).toLowerCase();
-    const contentType = ext === '.mp3' ? 'audio/mpeg' : 'video/mp4';
+    const contentType = MIME_MAP[ext] || 'application/octet-stream';
 
     // Clean, readable, Windows-safe filename
     const cleanFileName = sanitizeCleanFilename(job.fileName || job.title || `video${ext}`, ext);
@@ -208,11 +245,11 @@ export function cancelDownload(
     const job = jobRegistry.getJob(jobId);
 
     if (!job) {
-      throw new AppError('NOT_FOUND', 'Download job not found.', 404);
+      throw new AppError('NOT_FOUND', 'Download job not found or already expired.', 404);
     }
 
     job.cancel();
-    sendSuccess(res, { message: 'Download cancelled successfully.' }, 200);
+    sendSuccess(res, { jobId, status: 'cancelled' }, 200);
   } catch (error) {
     next(error);
   }

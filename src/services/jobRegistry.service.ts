@@ -8,6 +8,21 @@ import { AppError } from '../middleware/errorHandler.js';
 import { JobStatus, DownloadStage, DownloadProgress, DownloadJobData } from '../types/download.types.js';
 import { CleanupService } from './cleanup.service.js';
 
+function extractVideoIdOrIdentifier(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.toLowerCase() === 'youtu.be') {
+      return parsed.pathname.slice(1).split('/')[0] || '';
+    }
+    const v = parsed.searchParams.get('v');
+    if (v) return v;
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    return parts[parts.length - 1] || '';
+  } catch {
+    return '';
+  }
+}
+
 export class DownloadJob {
   public readonly jobId: string;
   public readonly url: string;
@@ -30,7 +45,8 @@ export class DownloadJob {
     this.jobId = crypto.randomUUID();
     this.url = url;
     this.formatId = formatId;
-    this.title = title || 'YouTube Video';
+    const fallbackId = extractVideoIdOrIdentifier(url);
+    this.title = title || (fallbackId ? `Video [${fallbackId}]` : 'Media Download');
     this.status = 'created';
     this.progress = {
       status: 'created',

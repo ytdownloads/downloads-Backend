@@ -10,7 +10,7 @@ import path from 'node:path';
 import https from 'node:https';
 import { execSync } from 'node:child_process';
 
-const YTDLP_VERSION = '2026.08.19';
+const YTDLP_VERSION = '2026.10.26';
 const FFMPEG_VERSION = '6.1';
 
 const YTDLP_URL = `https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp`;

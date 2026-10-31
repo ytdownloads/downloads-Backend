@@ -18,10 +18,11 @@ export class DownloadService {
    */
   public static async startDownload(
     url: string,
-    formatId: string
+    formatId: string,
+    clientTitle?: string
   ): Promise<DownloadJob> {
     // 1. URL verification
-    const validated = validateYouTubeUrl(url);
+    const validated = validateYouTubeUrl(url, { mode: 'video' });
     if (validated.type !== 'video') {
       throw new AppError(
         'INVALID_REQUEST',
@@ -43,7 +44,9 @@ export class DownloadService {
     }
 
     // Check if canonical URL is cached from metadata extraction
-    const cachedMeta = metadataCache.get(`video:${validated.id}`) as any;
+    const cachedMeta = (metadataCache.get(`video:${validated.id}`) ||
+      metadataCache.get(validated.normalizedUrl) ||
+      metadataCache.get(validated.id)) as any;
     if (cachedMeta && cachedMeta.type === 'video' && cachedMeta.liveStatus === 'is_upcoming') {
       throw new AppError(
         'LIVE_STREAM_UPCOMING',
@@ -58,8 +61,13 @@ export class DownloadService {
         ? cachedMeta.webpageUrl
         : validated.normalizedUrl;
 
+    const initialTitle =
+      clientTitle ||
+      cachedMeta?.title ||
+      (validated.id ? `Video [${validated.id}]` : 'Media Download');
+
     // 3. Create job in registry (handles concurrency limits)
-    const job = jobRegistry.createJob(downloadUrl, formatId);
+    const job = jobRegistry.createJob(downloadUrl, formatId, initialTitle);
 
     // 4. Ensure temporary job directory exists
     await fs.mkdir(job.tempDir, { recursive: true });
@@ -90,7 +98,7 @@ export class DownloadService {
       '--paths',
       `home:${job.tempDir}`,
       '--output',
-      '%(title).100B [%(id)s].%(ext)s',
+      '%(title)s [%(id)s].%(ext)s',
       '--progress-template',
       'download:download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.speed)s|%(progress.eta)s',
     ];
@@ -108,7 +116,7 @@ export class DownloadService {
       if (isLive) {
         args.push('--downloader', 'ffmpeg', '--downloader-args', 'ffmpeg_i:-t 60');
       }
-      args.push(downloadUrl);
+      args.push('--', downloadUrl);
     } else {
       const match = formatId.match(VALID_VIDEO_FORMAT_REGEX);
       const height = match ? parseInt(match[1], 10) : 1080;
@@ -121,7 +129,7 @@ export class DownloadService {
       if (isLive) {
         args.push('--downloader', 'ffmpeg', '--downloader-args', 'ffmpeg_i:-t 60');
       }
-      args.push(downloadUrl);
+      args.push('--', downloadUrl);
     }
 
     // 6. Launch download process in background
@@ -355,7 +363,24 @@ export class DownloadService {
       const filePath = path.join(job.tempDir, chosenFileName);
       const stat = await fs.stat(filePath);
       const ext = path.extname(chosenFileName);
-      const cleanFileName = sanitizeCleanFilename(job.title || chosenFileName, ext);
+
+      // If job.title is generic or missing, extract original title from yt-dlp filename: "[Title] [ID].ext"
+      let resolvedTitle = job.title;
+      if (
+        !resolvedTitle ||
+        resolvedTitle.startsWith('Video [') ||
+        resolvedTitle === 'Media Download' ||
+        resolvedTitle === 'YouTube Video'
+      ) {
+        const base = path.basename(chosenFileName, ext);
+        const idMatch = base.match(/^(.*?)\s+\[[A-Za-z0-9_-]{11}\]$/);
+        if (idMatch && idMatch[1] && idMatch[1].trim()) {
+          resolvedTitle = idMatch[1].trim();
+          job.title = resolvedTitle;
+        }
+      }
+
+      const cleanFileName = sanitizeCleanFilename(resolvedTitle || chosenFileName, ext);
 
       logger.info('Download job completed successfully', {
         jobId: job.jobId,

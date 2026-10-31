@@ -684,7 +684,7 @@ export class YtDlpService {
       const primaryArgs: string[] = [
         '--dump-single-json',
         ...(validated.type === 'playlist'
-          ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+          ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS)]
           : ['--no-playlist']),
         '--no-warnings',
         '--socket-timeout',
@@ -692,13 +692,15 @@ export class YtDlpService {
         '--retries',
         '2',
         ...(isPotActive ? potArgs : []),
-        '--extractor-args',
-        'youtube:player_client=mweb,web,android_vr',
+        ...(getPlayerClientArgs().length > 0
+          ? getPlayerClientArgs()
+          : ['--extractor-args', 'youtube:player_client=mweb,web,android_vr']),
         '--skip-download',
         '--js-runtimes',
         `node:${process.execPath}`,
         ...getUserAgentArgs(),
         ...getCookieArgs(),
+        '--',
         validated.normalizedUrl,
       ];
 
@@ -706,7 +708,7 @@ export class YtDlpService {
       const fallbackArgs: string[] = [
         '--dump-single-json',
         ...(validated.type === 'playlist'
-          ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS + 1)]
+          ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS)]
           : ['--no-playlist']),
         '--no-warnings',
         '--socket-timeout',
@@ -719,6 +721,7 @@ export class YtDlpService {
         '--js-runtimes',
         `node:${process.execPath}`,
         ...getUserAgentArgs(),
+        '--',
         validated.normalizedUrl,
       ];
 
@@ -752,7 +755,6 @@ export class YtDlpService {
         // Do NOT waste ~50s cascading through alternate strategies when YouTube definitively rejects access!
         if (err instanceof AppError) {
           if (
-            err.code === 'BOT_DETECTION_BLOCKED' ||
             err.code === 'VIDEO_UNAVAILABLE' ||
             err.code === 'AGE_RESTRICTED' ||
             err.code === 'PLAYLIST_UNAVAILABLE' ||
@@ -760,9 +762,6 @@ export class YtDlpService {
             err.code === 'TIMEOUT' ||
             err.statusCode === 504
           ) {
-            if (err.code === 'BOT_DETECTION_BLOCKED') {
-              recordBotBlock();
-            }
             logger.warn(`Immediate abort on definitive error for ${validated.id}: ${err.code}`);
             throw err;
           }
@@ -818,7 +817,7 @@ export class YtDlpService {
     return {
       type: 'video',
       id: data.id || validated.id,
-      title: data.title || 'Untitled Video',
+      title: data.title || (data.id ? `Video [${data.id}]` : 'Untitled Video'),
       thumbnail: getBestThumbnail(data),
       channel: data.channel || data.uploader || 'Unknown Channel',
       channelId: data.channel_id || data.uploader_id,
@@ -830,6 +829,7 @@ export class YtDlpService {
       isLive,
       liveStatus: data.live_status,
       formats: normalizeFormats(data.formats),
+      playlistId: validated.playlistId,
     };
   }
 
@@ -837,17 +837,8 @@ export class YtDlpService {
     data: RawYtDlpOutput,
     validated: ValidatedYouTubeUrl
   ): PlaylistMetadata {
-    const rawEntries = data.entries || [];
+    const rawEntries = (data.entries || []).slice(0, env.MAX_PLAYLIST_ITEMS);
     const totalCount = data.playlist_count || rawEntries.length;
-
-    // Resource protection: check against MAX_PLAYLIST_ITEMS
-    if (totalCount > env.MAX_PLAYLIST_ITEMS || rawEntries.length > env.MAX_PLAYLIST_ITEMS) {
-      throw new AppError(
-        'PLAYLIST_TOO_LARGE',
-        `This playlist contains ${totalCount} videos, which exceeds the maximum supported limit of ${env.MAX_PLAYLIST_ITEMS} videos.`,
-        400
-      );
-    }
 
     const items: PlaylistItem[] = [];
     const seenIds = new Set<string>();
@@ -865,7 +856,7 @@ export class YtDlpService {
       const duration = entry.duration || 0;
       items.push({
         id: itemId,
-        title: entry.title || `Video #${index}`,
+        title: entry.title || (entry.id ? `Video [${entry.id}]` : `Video #${index}`),
         thumbnail: getBestThumbnail(entry),
         duration,
         durationText: formatDuration(duration),
@@ -878,7 +869,7 @@ export class YtDlpService {
     return {
       type: 'playlist',
       id: data.id || validated.id,
-      title: data.title || 'Untitled Playlist',
+      title: data.title || (data.id ? `Playlist [${data.id}]` : 'Untitled Playlist'),
       thumbnail: getBestThumbnail(data) || (items[0]?.thumbnail ?? ''),
       channel: data.channel || data.uploader || 'Unknown Channel',
       channelId: data.channel_id || data.uploader_id,

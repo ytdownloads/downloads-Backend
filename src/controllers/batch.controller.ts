@@ -12,6 +12,16 @@ import { validateYouTubeUrl } from '../services/urlValidation.service.js';
 import { env } from '../config/env.js';
 import { sanitizeCleanFilename, buildContentDispositionHeader } from '../utils/filename.js';
 
+const MIME_MAP: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mkv': 'video/x-matroska',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.opus': 'audio/opus',
+  '.zip': 'application/zip',
+};
+
 const batchItemSchema = z.object({
   id: z.string().trim().min(1, 'Item id is required.'),
   url: z.string().trim().min(1, 'Item url is required.'),
@@ -264,8 +274,8 @@ export function getBatchItemFile(
     }
 
     const ext = path.extname(resolvedPath).toLowerCase();
-    const contentType = ext === '.mp3' ? 'audio/mpeg' : 'video/mp4';
-    const cleanFileName = sanitizeCleanFilename(item.fileName || item.title || `video${ext}`, ext);
+    const contentType = MIME_MAP[ext] || 'application/octet-stream';
+    const cleanFileName = sanitizeCleanFilename(item.fileName || item.title || `video${ext}`, ext, itemId);
 
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', buildContentDispositionHeader(cleanFileName));

@@ -4,6 +4,8 @@ export interface ValidatedYouTubeUrl {
   type: YouTubeUrlType;
   id: string;
   normalizedUrl: string;
+  videoId?: string;
+  playlistId?: string;
 }
 
 export interface NormalizedFormat {
@@ -32,6 +34,7 @@ export interface SingleVideoMetadata {
   isLive?: boolean;
   liveStatus?: string;
   formats: NormalizedFormat[];
+  playlistId?: string;
 }
 
 export interface PlaylistItem {
@@ -59,4 +62,5 @@ export type MediaInfoResult = SingleVideoMetadata | PlaylistMetadata;
 
 export interface InfoRequestBody {
   url: string;
+  mode?: 'video' | 'playlist';
 }

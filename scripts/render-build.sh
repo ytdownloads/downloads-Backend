@@ -15,7 +15,7 @@ mkdir -p bin
 mkdir -p node_modules/.bin
 
 # 3. Pinned reproducible versions
-YTDLP_VERSION="2026.08.19"
+YTDLP_VERSION="2026.10.26"
 FFMPEG_VERSION="6.1"
 
 # 4. Install standalone yt-dlp binary for Linux x86_64
