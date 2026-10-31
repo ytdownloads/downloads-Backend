@@ -26,6 +26,110 @@ export interface CookieStatus {
   validFormat: boolean;
   activePath: string | null;
   source: 'render_secret' | 'env_var' | 'none';
+  totalCookies: number;
+  validCookies: number;
+  expiredCookies: number;
+  hasAuthCookies: boolean;
+  isExpired: boolean;
+}
+
+const AUTH_COOKIE_NAMES = new Set([
+  'login_info',
+  'sapisid',
+  '__secure-3papisid',
+  '__secure-1papisid',
+  'sid',
+  'ssid',
+  'hsid',
+]);
+
+interface CookieAnalysis {
+  validFormat: boolean;
+  totalCookies: number;
+  validCookies: number;
+  expiredCookies: number;
+  hasAuthCookies: boolean;
+  isExpired: boolean;
+}
+
+/**
+ * Safely analyzes Netscape/HTTP cookie content without exposing or logging values.
+ * Detects cookie counts, auth session cookies, and expiration timestamps.
+ */
+function analyzeCookieContent(content: string): CookieAnalysis {
+  if (!content || !content.trim()) {
+    return {
+      validFormat: false,
+      totalCookies: 0,
+      validCookies: 0,
+      expiredCookies: 0,
+      hasAuthCookies: false,
+      isExpired: false,
+    };
+  }
+
+  const lines = content.split(/\r?\n/);
+  const firstLine = lines[0]?.trim() || '';
+  const validFormat =
+    firstLine.startsWith('# HTTP Cookie File') ||
+    firstLine.startsWith('# Netscape HTTP Cookie File');
+
+  let totalCookies = 0;
+  let validCookies = 0;
+  let expiredCookies = 0;
+  let hasAuthCookies = false;
+  let validAuthCookies = 0;
+
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    // Tab-delimited (or multi-space) Netscape format:
+    // domain, flag, path, secure, expiration, name, value
+    const parts = trimmed.split(/\t+/);
+    if (parts.length >= 7) {
+      totalCookies++;
+      const expiry = parseInt(parts[4], 10);
+      const name = (parts[5] || '').toLowerCase();
+
+      const isAuth = AUTH_COOKIE_NAMES.has(name);
+      if (isAuth) {
+        hasAuthCookies = true;
+      }
+
+      // expiry === 0 represents a session cookie (valid until browser closes)
+      const isUnexpired = isNaN(expiry) || expiry === 0 || expiry > nowSec;
+
+      if (isUnexpired) {
+        validCookies++;
+        if (isAuth) {
+          validAuthCookies++;
+        }
+      } else {
+        expiredCookies++;
+      }
+    }
+  }
+
+  // A cookie set is considered expired if:
+  // 1. It contains auth cookies, but every single auth cookie is expired.
+  // 2. Or it contains cookies, but 100% of the cookies are expired.
+  const isExpired =
+    totalCookies > 0 &&
+    ((hasAuthCookies && validAuthCookies === 0) || validCookies === 0);
+
+  return {
+    validFormat,
+    totalCookies,
+    validCookies,
+    expiredCookies,
+    hasAuthCookies,
+    isExpired,
+  };
 }
 
 let lastBotBlockTimestamp = 0;
@@ -43,7 +147,6 @@ export function inspectCookieStatus(): CookieStatus {
   try {
     if (fs.existsSync(RENDER_SECRET_COOKIE_PATH)) {
       let isReadable = false;
-      let isValidFormat = false;
 
       try {
         fs.accessSync(RENDER_SECRET_COOKIE_PATH, fs.constants.R_OK);
@@ -54,45 +157,57 @@ export function inspectCookieStatus(): CookieStatus {
 
       if (isReadable) {
         try {
-          // Read only up to 512 bytes to inspect the header line safely without exposing or loading all cookies
-          const fd = fs.openSync(RENDER_SECRET_COOKIE_PATH, 'r');
-          const buf = Buffer.alloc(512);
-          const bytesRead = fs.readSync(fd, buf, 0, 512, 0);
-          fs.closeSync(fd);
+          const content = fs.readFileSync(RENDER_SECRET_COOKIE_PATH, 'utf-8');
+          const analysis = analyzeCookieContent(content);
 
-          const header = buf.toString('utf-8', 0, bytesRead);
-          const firstLine = header.split(/\r?\n/)[0]?.trim() || '';
-          if (
-            firstLine.startsWith('# HTTP Cookie File') ||
-            firstLine.startsWith('# Netscape HTTP Cookie File')
-          ) {
-            isValidFormat = true;
+          let activePath: string | null = null;
+          if (analysis.validFormat && !analysis.isExpired && analysis.validCookies > 0) {
+            try {
+              const writablePath = path.join(os.tmpdir(), 'render-youtube-cookies.txt');
+              // Render mounts /etc/secrets as read-only. yt-dlp dumps updated cookie jar on exit,
+              // which causes OSError [Errno 30] Read-only file system unless pointed to a writable path.
+              fs.writeFileSync(writablePath, content, 'utf-8');
+              activePath = writablePath;
+            } catch (copyErr) {
+              logger.warn('Failed copying secret cookies to writable tmp location', { error: String(copyErr) });
+              activePath = RENDER_SECRET_COOKIE_PATH;
+            }
+          } else if (analysis.isExpired) {
+            logger.warn('YouTube cookies are EXPIRED. Bypassing cookies to prevent YouTube bot challenge / session rejection.', {
+              totalCookies: analysis.totalCookies,
+              expiredCookies: analysis.expiredCookies,
+              hasAuthCookies: analysis.hasAuthCookies,
+            });
           }
-        } catch (err) {
-          logger.warn('Failed reading cookie secret header', { error: String(err) });
-        }
-      }
 
-      let activePath: string | null = null;
-      if (isReadable && isValidFormat) {
-        try {
-          const writablePath = path.join(os.tmpdir(), 'render-youtube-cookies.txt');
-          // Render mounts /etc/secrets as read-only. yt-dlp dumps updated cookie jar on exit,
-          // which causes OSError [Errno 30] Read-only file system unless pointed to a writable path.
-          fs.copyFileSync(RENDER_SECRET_COOKIE_PATH, writablePath);
-          activePath = writablePath;
-        } catch (copyErr) {
-          logger.warn('Failed copying secret cookies to writable tmp location', { error: String(copyErr) });
-          activePath = RENDER_SECRET_COOKIE_PATH;
+          return {
+            detected: true,
+            readable: isReadable,
+            validFormat: analysis.validFormat,
+            activePath,
+            source: 'render_secret',
+            totalCookies: analysis.totalCookies,
+            validCookies: analysis.validCookies,
+            expiredCookies: analysis.expiredCookies,
+            hasAuthCookies: analysis.hasAuthCookies,
+            isExpired: analysis.isExpired,
+          };
+        } catch (err) {
+          logger.warn('Failed reading cookie secret file', { error: String(err) });
         }
       }
 
       return {
         detected: true,
         readable: isReadable,
-        validFormat: isValidFormat,
-        activePath,
+        validFormat: false,
+        activePath: null,
         source: 'render_secret',
+        totalCookies: 0,
+        validCookies: 0,
+        expiredCookies: 0,
+        hasAuthCookies: false,
+        isExpired: false,
       };
     }
   } catch (err) {
@@ -102,15 +217,11 @@ export function inspectCookieStatus(): CookieStatus {
   // 2. Secondary fallback: YOUTUBE_COOKIES environment variable (for local testing/backward compatibility)
   const envCookies = env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIES;
   if (envCookies && envCookies.trim()) {
-    const firstLine = envCookies.trim().split(/\r?\n/)[0]?.trim() || '';
-    const isValidFormat =
-      firstLine.startsWith('# HTTP Cookie File') ||
-      firstLine.startsWith('# Netscape HTTP Cookie File');
-
+    const analysis = analyzeCookieContent(envCookies);
     let tempCookiePath: string | null = null;
     let isReadable = false;
 
-    if (isValidFormat) {
+    if (analysis.validFormat && !analysis.isExpired && analysis.validCookies > 0) {
       try {
         const cookieFilePath = path.join(os.tmpdir(), 'ytdl_cookies.txt');
         fs.writeFileSync(cookieFilePath, envCookies.trim(), 'utf-8');
@@ -119,14 +230,26 @@ export function inspectCookieStatus(): CookieStatus {
       } catch (err) {
         logger.warn('Failed writing env cookies to temp file', { error: String(err) });
       }
+    } else if (analysis.isExpired) {
+      logger.warn('YOUTUBE_COOKIES env var contains EXPIRED cookies. Bypassing cookies.', {
+        totalCookies: analysis.totalCookies,
+        expiredCookies: analysis.expiredCookies,
+        hasAuthCookies: analysis.hasAuthCookies,
+      });
+      isReadable = true;
     }
 
     return {
       detected: true,
       readable: isReadable,
-      validFormat: isValidFormat,
+      validFormat: analysis.validFormat,
       activePath: tempCookiePath,
       source: 'env_var',
+      totalCookies: analysis.totalCookies,
+      validCookies: analysis.validCookies,
+      expiredCookies: analysis.expiredCookies,
+      hasAuthCookies: analysis.hasAuthCookies,
+      isExpired: analysis.isExpired,
     };
   }
 
@@ -136,6 +259,11 @@ export function inspectCookieStatus(): CookieStatus {
     validFormat: false,
     activePath: null,
     source: 'none',
+    totalCookies: 0,
+    validCookies: 0,
+    expiredCookies: 0,
+    hasAuthCookies: false,
+    isExpired: false,
   };
 }
 
@@ -166,7 +294,7 @@ export function getUserAgentArgs(): string[] {
   return [];
 }
 
-export const DEFAULT_PLAYER_CLIENT = 'android_vr,web_embedded';
+export const DEFAULT_PLAYER_CLIENT = 'visionos,android_vr,android';
 
 export function getExtractorClientConfigString(): string {
   const customClient = env.YOUTUBE_PLAYER_CLIENT || process.env.YOUTUBE_PLAYER_CLIENT;
@@ -174,8 +302,8 @@ export function getExtractorClientConfigString(): string {
     return `youtube:player_client=${customClient.trim()}`;
   }
   return potProviderService.getStatus().active
-    ? 'youtube:player_client=mweb,web,android_vr (POT enabled)'
-    : 'youtube:player_client=default';
+    ? 'default (dynamic POT + resilient visionos/android pipeline)'
+    : 'default (resilient multi-client pipeline)';
 }
 
 /**
@@ -673,15 +801,13 @@ export class YtDlpService {
     });
 
     try {
-      const cookieStatus = inspectCookieStatus();
+      const cookieArgs = getCookieArgs();
       const potArgs = potProviderService.getYtDlpArgs();
       const isPotActive = potProviderService.getStatus().active;
+      const explicitClientArgs = getPlayerClientArgs();
 
-      // Primary extraction strategy:
-      // Uses dynamic POT Provider (if active) + Configured Cookies (if any) +
-      // Best player clients (mweb,web,android_vr).
-      // Bounded socket-timeout (10s) and bounded retries (1) to fail fast on network blocks.
-      const primaryArgs: string[] = [
+      // Common base arguments for yt-dlp metadata extraction
+      const commonArgs = [
         '--dump-single-json',
         ...(validated.type === 'playlist'
           ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS)]
@@ -691,116 +817,112 @@ export class YtDlpService {
         '20',
         '--retries',
         '2',
-        ...(isPotActive ? potArgs : []),
-        ...(getPlayerClientArgs().length > 0
-          ? getPlayerClientArgs()
-          : ['--extractor-args', 'youtube:player_client=mweb,web,android_vr']),
         '--skip-download',
         '--js-runtimes',
         `node:${process.execPath}`,
         ...getUserAgentArgs(),
-        ...getCookieArgs(),
-        '--',
-        validated.normalizedUrl,
       ];
 
-      // Fallback strategy: TV embedded / web embedded (only used if primary fails with transient non-definitive error)
-      const fallbackArgs: string[] = [
-        '--dump-single-json',
-        ...(validated.type === 'playlist'
-          ? ['--flat-playlist', '--playlist-end', String(env.MAX_PLAYLIST_ITEMS)]
-          : ['--no-playlist']),
-        '--no-warnings',
-        '--socket-timeout',
-        '20',
-        '--retries',
-        '2',
-        '--extractor-args',
-        'youtube:player_client=tv_embedded,web_embedded',
-        '--skip-download',
-        '--js-runtimes',
-        `node:${process.execPath}`,
-        ...getUserAgentArgs(),
-        '--',
-        validated.normalizedUrl,
-      ];
+      // Build prioritized extraction attempts:
+      const attempts: { name: string; args: string[] }[] = [];
 
-      let lastError: any = null;
+      // Attempt 1: Primary extraction
+      // Uses POT provider (if active) + cookies (if valid & unexpired) + explicit or default client selection
+      attempts.push({
+        name: 'Primary (POT + Defaults/Cookies)',
+        args: [
+          ...commonArgs,
+          ...(isPotActive ? potArgs : []),
+          ...explicitClientArgs,
+          ...cookieArgs,
+          '--',
+          validated.normalizedUrl,
+        ],
+      });
 
-      // 1. Execute Primary Strategy
-      try {
-        logger.debug(`Attempting metadata extraction with primary strategy for ${validated.id}`);
-        const rawJson = await this.executeYtDlp(primaryArgs);
-        const parsed: RawYtDlpOutput = JSON.parse(rawJson);
-
-        let result: MediaInfoResult;
-        if (parsed._type === 'playlist' || validated.type === 'playlist') {
-          result = this.normalizePlaylist(parsed, validated);
-        } else {
-          result = this.normalizeSingleVideo(parsed, validated);
-        }
-
-        clearBotBlock();
-        metadataCache.set(cacheKey, result, rawJson);
-        metadataCache.set(`${validated.type}:${validated.id}`, result, rawJson);
-        metadataCache.set(validated.normalizedUrl, result, rawJson);
-        if (validated.id) {
-          metadataCache.set(validated.id, result, rawJson);
-        }
-        return result;
-      } catch (err: any) {
-        lastError = err;
-
-        // Immediate abort for definitive, non-retryable errors.
-        // Do NOT waste ~50s cascading through alternate strategies when YouTube definitively rejects access!
-        if (err instanceof AppError) {
-          if (
-            err.code === 'VIDEO_UNAVAILABLE' ||
-            err.code === 'AGE_RESTRICTED' ||
-            err.code === 'PLAYLIST_UNAVAILABLE' ||
-            err.code === 'INVALID_URL' ||
-            err.code === 'TIMEOUT' ||
-            err.statusCode === 504
-          ) {
-            logger.warn(`Immediate abort on definitive error for ${validated.id}: ${err.code}`);
-            throw err;
-          }
-        }
-
-        logger.warn(`Primary extraction failed for ${validated.id}, attempting single fallback...`, {
-          error: err.message,
-          code: err instanceof AppError ? err.code : 'UNKNOWN',
+      // Attempt 2: Clean fallback without cookies
+      // If cookies were provided in Attempt 1 and caused a session challenge or bot block, retry cleanly
+      if (cookieArgs.length > 0) {
+        attempts.push({
+          name: 'Fallback (Clean without cookies)',
+          args: [
+            ...commonArgs,
+            ...(isPotActive ? potArgs : []),
+            ...explicitClientArgs,
+            '--',
+            validated.normalizedUrl,
+          ],
         });
       }
 
-      // 2. Single Bounded Fallback (only for transient non-definitive errors)
-      try {
-        logger.debug(`Attempting metadata extraction with fallback strategy for ${validated.id}`);
-        const rawJson = await this.executeYtDlp(fallbackArgs);
-        const parsed: RawYtDlpOutput = JSON.parse(rawJson);
+      // Attempt 3: Resilient mobile/VR client fallback
+      // Uses InnerTube clients (visionos, android_vr, android) that bypass Web BotGuard challenges on datacenter IPs
+      attempts.push({
+        name: 'Fallback (Resilient visionos/android)',
+        args: [
+          ...commonArgs,
+          '--extractor-args',
+          'youtube:player_client=visionos,android_vr,android',
+          '--',
+          validated.normalizedUrl,
+        ],
+      });
 
-        let result: MediaInfoResult;
-        if (parsed._type === 'playlist' || validated.type === 'playlist') {
-          result = this.normalizePlaylist(parsed, validated);
-        } else {
-          result = this.normalizeSingleVideo(parsed, validated);
-        }
+      let lastError: any = null;
 
-        clearBotBlock();
-        metadataCache.set(cacheKey, result, rawJson);
-        metadataCache.set(`${validated.type}:${validated.id}`, result, rawJson);
-        metadataCache.set(validated.normalizedUrl, result, rawJson);
-        if (validated.id) {
-          metadataCache.set(validated.id, result, rawJson);
+      for (let i = 0; i < attempts.length; i++) {
+        const attempt = attempts[i];
+        try {
+          logger.debug(`Attempting metadata extraction with [${attempt.name}] for ${validated.id}`);
+          const rawJson = await this.executeYtDlp(attempt.args);
+          const parsed: RawYtDlpOutput = JSON.parse(rawJson);
+
+          let result: MediaInfoResult;
+          if (parsed._type === 'playlist' || validated.type === 'playlist') {
+            result = this.normalizePlaylist(parsed, validated);
+          } else {
+            result = this.normalizeSingleVideo(parsed, validated);
+          }
+
+          clearBotBlock();
+          metadataCache.set(cacheKey, result, rawJson);
+          metadataCache.set(`${validated.type}:${validated.id}`, result, rawJson);
+          metadataCache.set(validated.normalizedUrl, result, rawJson);
+          if (validated.id) {
+            metadataCache.set(validated.id, result, rawJson);
+          }
+          return result;
+        } catch (err: any) {
+          lastError = err;
+
+          // Immediate abort for definitive, non-retryable errors.
+          // Do NOT waste time cascading through alternate strategies when YouTube definitively rejects access!
+          if (err instanceof AppError) {
+            if (
+              err.code === 'VIDEO_UNAVAILABLE' ||
+              err.code === 'AGE_RESTRICTED' ||
+              err.code === 'PLAYLIST_UNAVAILABLE' ||
+              err.code === 'INVALID_URL' ||
+              err.code === 'TIMEOUT' ||
+              err.statusCode === 504
+            ) {
+              logger.warn(`Immediate abort on definitive error for ${validated.id}: ${err.code}`);
+              throw err;
+            }
+          }
+
+          logger.warn(`Extraction attempt [${attempt.name}] failed for ${validated.id}`, {
+            error: err.message,
+            code: err instanceof AppError ? err.code : 'UNKNOWN',
+            hasRemainingAttempts: i < attempts.length - 1,
+          });
         }
-        return result;
-      } catch (fallbackErr: any) {
-        lastError = fallbackErr;
-        if (fallbackErr instanceof AppError && fallbackErr.code === 'BOT_DETECTION_BLOCKED') {
-          recordBotBlock();
-        }
-        throw lastError || new AppError('METADATA_FAILED', 'Failed to extract media metadata.', 500);
       }
+
+      if (lastError instanceof AppError && lastError.code === 'BOT_DETECTION_BLOCKED') {
+        recordBotBlock();
+      }
+      throw lastError || new AppError('METADATA_FAILED', 'Failed to extract media metadata.', 500);
     } finally {
       const duration = Date.now() - startTime;
       logger.info(`Finished metadata extraction for id: ${validated.id} in ${duration}ms`);

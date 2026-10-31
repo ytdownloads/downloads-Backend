@@ -85,6 +85,11 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
     validFormat: cookieStatus.validFormat,
     source: cookieStatus.source,
     cookiesPassedToYtDlp: Boolean(cookieStatus.activePath),
+    totalCookies: cookieStatus.totalCookies,
+    validCookies: cookieStatus.validCookies,
+    expiredCookies: cookieStatus.expiredCookies,
+    hasAuthCookies: cookieStatus.hasAuthCookies,
+    isExpired: cookieStatus.isExpired,
   };
 
   if (!isReady) {
