@@ -164,4 +164,66 @@ export async function getHealthCheck(_req: Request, res: Response): Promise<void
   }, 200);
 }
 
+export async function getHealthProbe(req: Request, res: Response): Promise<void> {
+  const rawUrl = (req.query.url as string) || 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
+  const cookieStatus = inspectCookieStatus();
+  const noCookies = req.query.nocookies === '1' || req.query.nocookies === 'true';
+  const customClient = req.query.client as string;
+
+  const args: string[] = [
+    '-v',
+    '-4',
+    '--dump-single-json',
+    '--no-playlist',
+    '--skip-download',
+    '--socket-timeout',
+    '20',
+    '--retries',
+    '1',
+  ];
+
+  if (!noCookies && cookieStatus.activePath) {
+    args.push('--cookies', cookieStatus.activePath);
+  }
+
+  if (customClient) {
+    args.push('--extractor-args', `youtube:player_client=${customClient.trim()}`);
+  }
+
+  args.push('--', rawUrl);
+
+  try {
+    const { stdout, stderr } = await execAsync(`yt-dlp ${args.map((a) => `"${a}"`).join(' ')}`, {
+      timeout: 30000,
+      maxBuffer: 15 * 1024 * 1024,
+    });
+    res.json({
+      success: true,
+      args,
+      cookieStatus: {
+        detected: cookieStatus.detected,
+        hasAuthCookies: cookieStatus.hasAuthCookies,
+        isExpired: cookieStatus.isExpired,
+        activePathPassed: !noCookies && Boolean(cookieStatus.activePath),
+      },
+      stdoutLength: stdout.length,
+      stderr: stderr.slice(-3000),
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      args,
+      error: err.message,
+      cookieStatus: {
+        detected: cookieStatus.detected,
+        hasAuthCookies: cookieStatus.hasAuthCookies,
+        isExpired: cookieStatus.isExpired,
+        activePathPassed: !noCookies && Boolean(cookieStatus.activePath),
+      },
+      stdoutSnippet: (err.stdout || '').slice(0, 500),
+      stderr: (err.stderr || '').slice(-3000),
+    });
+  }
+}
+
 

@@ -880,6 +880,7 @@ export class YtDlpService {
       });
 
       let lastError: any = null;
+      const attemptErrors: { name: string; message: string; stderr?: string }[] = [];
 
       for (let i = 0; i < attempts.length; i++) {
         const attempt = attempts[i];
@@ -905,6 +906,11 @@ export class YtDlpService {
           return result;
         } catch (err: any) {
           lastError = err;
+          attemptErrors.push({
+            name: attempt.name,
+            message: err.message,
+            stderr: err.details?.stderr || err.details?.stderrSample,
+          });
 
           // Immediate abort for definitive, non-retryable errors.
           // Do NOT waste time cascading through alternate strategies when YouTube definitively rejects access!
@@ -932,6 +938,11 @@ export class YtDlpService {
 
       if (lastError instanceof AppError && lastError.code === 'BOT_DETECTION_BLOCKED') {
         recordBotBlock();
+        const combinedDetails = {
+          ...(typeof lastError.details === 'object' && lastError.details !== null ? lastError.details : {}),
+          attemptErrors,
+        };
+        throw new AppError(lastError.code, lastError.message, lastError.statusCode, combinedDetails);
       }
       throw lastError || new AppError('METADATA_FAILED', 'Failed to extract media metadata.', 500);
     } finally {
